@@ -1,0 +1,21 @@
+{
+  "name": "sceneweaver",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch server.js",
+    "start": "node server.js",
+    "migrate": "node scripts/migrate.js",
+    "seed": "node scripts/seed.js",
+    "reset:demo": "node scripts/reset-demo.js",
+    "db:setup": "npm run migrate && npm run seed",
+    "check": "node --check server.js && node --check codex-client.js && node --check app.js && node --check scripts/migrate.js && node --check scripts/seed.js && node --check scripts/reset-demo.js && node --check scripts/verify-api.js",
+    "verify:api": "node scripts/verify-api.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.6.1",
+    "express": "^5.1.0",
+    "pg": "^8.16.3"
+  }
+}

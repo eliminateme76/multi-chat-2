@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#101326" />
+    <title>Sceneweaver — AI 캐릭터 월드</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Gowun+Dodum&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="#top" aria-label="Sceneweaver 홈"><span class="brand-mark">✦</span><span>SCENEWEAVER</span></a>
+        <div class="world-heading"><span class="eyebrow">현재 세계</span><h1 id="world-title">별빛 마도학원</h1></div>
+        <div class="top-actions"><span id="save-status" class="save-status">자동 저장됨</span><button id="reset-button" class="icon-button" title="데모 초기화" aria-label="데모 초기화">↺</button></div>
+      </header>
+
+      <section class="stage" id="top">
+        <aside class="left-panel panel">
+          <div class="panel-heading"><div><span class="eyebrow">CAST</span><h2>등장인물</h2></div><button id="open-character-modal" class="round-add" aria-label="캐릭터 추가">+</button></div>
+          <div id="character-list" class="character-list"></div>
+          <button id="open-world-modal" class="world-card">
+            <span class="world-card-icon">✧</span><span><strong>세계관 편집</strong><small>장소, 규칙, 분위기 설정</small></span><span>›</span>
+          </button>
+        </aside>
+
+        <section class="conversation-panel">
+          <div class="scene-banner">
+            <div><span class="eyebrow">SCENE · <span id="scene-number">01</span></span><h2 id="scene-location">중앙 도서관, 금서 보관실 앞</h2><p id="scene-description">늦은 밤. 폭풍우가 창을 두드리고, 오래된 마법서가 희미하게 빛난다.</p></div>
+            <div class="scene-mood"><span>분위기</span><strong id="scene-mood">긴장 · 미스터리</strong></div>
+          </div>
+          <div id="conversation-log" class="conversation-log" aria-live="polite"></div>
+          <div class="conversation-controls">
+            <button id="advance-button" class="primary-button"><span>✦</span> 다음 장면 진행</button>
+            <button id="auto-button" class="secondary-button">자동 진행 <span id="auto-state">OFF</span></button>
+          </div>
+        </section>
+
+        <aside class="right-panel panel">
+          <div class="panel-heading"><div><span class="eyebrow">DIRECTOR</span><h2>장면 상태</h2></div><span class="live-dot">LIVE</span></div>
+          <dl id="state-list" class="state-list"></dl>
+          <div class="director-note"><span>DIRECTOR NOTE</span><p id="director-note">세라의 비밀을 둘러싼 긴장을 유지하세요. 루카에게는 아직 확실한 증거가 없습니다.</p></div>
+          <div class="relationship-section"><span class="eyebrow">RELATIONSHIPS</span><div id="relationship-list"></div></div>
+        </aside>
+      </section>
+
+      <section class="intervention panel">
+        <div class="intervention-heading"><div><span class="eyebrow">DIRECTOR INTERVENTION</span><h2>이야기에 변화를 주세요</h2></div><button id="suggest-button" class="text-button">✦ AI 전개 추천</button></div>
+        <div id="suggestion-list" class="suggestion-list"></div>
+        <form id="event-form" class="event-form">
+          <label class="sr-only" for="event-input">새로운 사건</label><input id="event-input" maxlength="180" placeholder="예: 정체불명의 편지가 창문을 깨고 날아든다." />
+          <button class="event-submit" type="submit">사건 투입 <span>→</span></button>
+        </form>
+      </section>
+    </main>
+
+    <dialog id="character-modal" class="modal"><form id="character-form" method="dialog" class="modal-card"><div class="modal-header"><div><span class="eyebrow">CHARACTER AGENT</span><h2 id="character-modal-title">새 캐릭터 만들기</h2></div><button type="button" class="close-button" data-close="character-modal">×</button></div><div class="form-grid"><label>이름<input name="name" required maxlength="20" /></label><label>역할<input name="role" required maxlength="40" placeholder="예: 마법 기사 견습생" /></label><label class="full">성격<input name="personality" required maxlength="120" placeholder="쉼표로 구분해 입력" /></label><label class="full">말투<input name="speechStyle" required maxlength="120" /></label><label>목표<input name="goal" required maxlength="120" /></label><label>비밀<input name="secret" required maxlength="120" /></label></div><div class="modal-footer"><button type="button" id="ai-character-button" class="secondary-button">✦ AI 초안 채우기</button><button class="primary-button" value="default">저장하기</button></div></form></dialog>
+
+    <dialog id="world-modal" class="modal"><form id="world-form" method="dialog" class="modal-card"><div class="modal-header"><div><span class="eyebrow">WORLD BIBLE</span><h2>세계관과 장면 편집</h2></div><button type="button" class="close-button" data-close="world-modal">×</button></div><div class="form-grid"><label>세계 이름<input name="title" required maxlength="50" /></label><label>현재 장소<input name="location" required maxlength="70" /></label><label>분위기<input name="mood" required maxlength="70" /></label><label>시간<input name="time" required maxlength="40" /></label><label class="full">장면 설명<textarea name="description" required maxlength="300"></textarea></label><label class="full">세계 규칙<textarea name="rules" required maxlength="300" placeholder="쉼표로 구분해 입력"></textarea></label></div><div class="modal-footer"><button class="primary-button" value="default">변경 저장</button></div></form></dialog>
+    <script src="./app.js"></script>
+  </body>
+</html>
