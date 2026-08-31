@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sceneweaver Runtime Monitor</title>
+    <link rel="stylesheet" href="./monitor.css" />
+  </head>
+  <body>
+    <header class="monitor-topbar">
+      <a href="/" class="brand">✦ SCENEWEAVER</a>
+      <div><span>RUNTIME MONITOR</span><strong id="connection-state">연결 중</strong></div>
+      <select id="monitor-project" aria-label="모니터링할 세계관"></select>
+    </header>
+    <main>
+      <section class="summary-grid">
+        <article class="primary-status"><span>현재 상태</span><strong id="run-status">대기</strong><small id="run-detail">새 요청을 기다리고 있습니다</small></article>
+        <article><span>현재 단계</span><strong id="current-stage">대기</strong><small id="current-stage-time">—</small></article>
+        <article><span>병목 구간</span><strong id="bottleneck">—</strong></article>
+        <article><span>총 시간 · APP SERVER</span><strong><span id="total-duration">—</span> · <span id="app-server-state">대기</span></strong><small id="app-server-detail"></small></article>
+      </section>
+
+      <section class="canvas-panel">
+        <div class="panel-title"><div><span>LIVE PIPELINE</span><h1>턴 실행 그래프</h1></div><small>현재 단계는 보라색으로 강조됩니다</small></div>
+        <div id="pipeline" class="pipeline" aria-live="polite"></div>
+        <aside id="node-detail" class="node-detail"><span>NODE DETAIL</span><p>노드를 선택하세요.</p></aside>
+      </section>
+
+      <section class="lower-grid">
+        <article class="waterfall-panel">
+          <div class="panel-title"><div><span>TRACE</span><h2>최근 실행 Waterfall</h2></div></div>
+          <div id="waterfall" class="waterfall"></div>
+        </article>
+        <article class="history-panel">
+          <div class="panel-title"><div><span>HISTORY</span><h2>최근 요청</h2></div></div>
+          <div id="run-history" class="run-history"></div>
+        </article>
+      </section>
+    </main>
+    <script src="./monitor.js"></script>
+  </body>
+</html>

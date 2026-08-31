@@ -1,0 +1,43 @@
+.world-heading select {
+  min-width: 210px;
+  max-width: 330px;
+  margin-top: 3px;
+  border: 0;
+  border-bottom: 1px solid #55566d;
+  background: transparent;
+  color: #fff;
+  padding: 3px 25px 4px 5px;
+  font: 600 18px 'Playfair Display', 'Gowun Dodum', serif;
+  text-align: center;
+  cursor: pointer;
+}
+
+.world-heading select option {
+  background: var(--navy);
+  color: #fff;
+}
+
+.top-actions a.icon-button {
+  color: inherit;
+  text-decoration: none;
+}
+
+.conversation-log.chat-mode .message:not(.event) {
+  margin-bottom: 14px;
+}
+
+.conversation-log.chat-mode .message-text {
+  display: inline-block;
+  margin-top: 5px;
+  padding: 9px 12px;
+  border-radius: 4px 14px 14px 14px;
+  background: #f0edf9;
+}
+
+.conversation-log.chat-mode .message-role {
+  display: none;
+}
+.avatar{overflow:hidden}.avatar img{width:100%;height:100%;object-fit:cover;display:block}.form-grid select{display:block;width:100%;margin-top:5px;border:1px solid #dedbe8;border-radius:6px;padding:9px;background:#fff;font:13px 'Gowun Dodum',sans-serif;color:var(--ink)}
+.suggestion-empty{display:block;padding:12px;color:var(--muted);font-size:12px}.suggestion:disabled,.text-button:disabled{opacity:.55;cursor:wait}
+.event-direction{display:flex;align-items:flex-start;gap:12px;margin:4px 0 14px;font-size:11px;color:var(--muted)}.event-direction>span{padding-top:6px;white-space:nowrap}.event-type-filters{display:flex;flex-wrap:wrap;gap:5px}.event-type-chip input{position:absolute;opacity:0;pointer-events:none}.event-type-chip span{display:block;padding:4px 8px;border:1px solid #dedbe8;border-radius:99px;background:#fff;cursor:pointer}.event-type-chip input:checked+span{border-color:#8b7bd8;background:#f0edff;color:var(--violet);font-weight:bold}.event-form select{border:1px solid #dedbe7;border-radius:7px;background:#fff;padding:0 9px;font:12px 'Gowun Dodum',sans-serif;color:var(--ink)}
+.typing-indicator{display:flex;align-items:center;gap:4px;margin:7px 0 0;color:var(--muted);font-size:11px}.typing-indicator i{width:5px;height:5px;border-radius:50%;background:#9188ba;animation:typing-bounce 1.1s infinite}.typing-indicator i:nth-child(2){animation-delay:.15s}.typing-indicator i:nth-child(3){animation-delay:.3s}.typing-indicator span{margin-left:3px}@keyframes typing-bounce{0%,60%,100%{transform:translateY(0);opacity:.45}30%{transform:translateY(-4px);opacity:1}}

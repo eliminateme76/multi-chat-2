@@ -1,0 +1,1 @@
+ALTER TABLE scene_entries ADD COLUMN IF NOT EXISTS event_type TEXT NOT NULL DEFAULT '일반';

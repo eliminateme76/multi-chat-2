@@ -3,48 +3,57 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 
-const baseUrl = 'http://127.0.0.1:3000';
-const testEvent = '검증용 사건: 종소리가 울린다.';
+const port = 3101;
+const baseUrl = `http://127.0.0.1:${port}`;
+const projectId = randomUUID();
+const sceneId = randomUUID();
+const characterIds = [randomUUID(), randomUUID(), randomUUID()];
 const { Pool } = pg;
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-const server = spawn(process.execPath, ['server.js'], { stdio: ['ignore', 'pipe', 'pipe'] });
+let server;
 let serverOutput = '';
-let before;
-server.stdout.on('data', (chunk) => { serverOutput += chunk; });
-server.stderr.on('data', (chunk) => { serverOutput += chunk; });
 const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
-const request = async (path, options) => { const response = await fetch(`${baseUrl}${path}`, options); if (!response.ok) throw new Error(`${path}: ${await response.text()}`); return response.json(); };
+const request = async (path, options) => {
+  const separator = path.includes('?') ? '&' : '?';
+  const response = await fetch(`${baseUrl}${path}${separator}projectId=${projectId}`, options);
+  if (!response.ok) throw new Error(`${path}: ${await response.text()}`);
+  return response.json();
+};
+
+async function seedTemporaryProject() {
+  await pool.query('BEGIN');
+  try {
+    await pool.query(`INSERT INTO projects (id,title,location,mood,scene_time,description,rules,public_direction,private_director_state)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [projectId, 'API 검증 세계', '검증실', '긴장', '자정', '세 인물이 잠긴 상자를 조사한다.', '공개된 증거만 사용한다.', '상자의 단서를 구체적으로 조사하세요.', '두 번째 인물이 열쇠를 숨겼다.']);
+    for (const [index, id] of characterIds.entries()) await pool.query(`INSERT INTO characters (id,project_id,name,role,personality,speech_style,goal,secret,emotion,sort_order)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, [id, projectId, `검증인물${index + 1}`, '조사자', '침착함, 관찰력', '간결한 존댓말', '상자의 정체를 밝힌다.', `개인 비밀 ${index + 1}`, '집중', index]);
+    await pool.query(`INSERT INTO scenes (id,project_id,scene_number,location,mood,scene_time,description,summary,public_direction,private_director_state)
+      VALUES ($1,$2,1,$3,$4,$5,$6,$6,$7,$8)`, [sceneId, projectId, '검증실', '긴장', '자정', '세 인물이 잠긴 상자를 조사한다.', '상자의 단서를 구체적으로 조사하세요.', '두 번째 인물이 열쇠를 숨겼다.']);
+    await pool.query('COMMIT');
+  } catch (error) { await pool.query('ROLLBACK'); throw error; }
+}
+
 async function waitForServer() {
-  for (let attempt = 0; attempt < 30; attempt += 1) {
-    try { await request('/api/state'); return; } catch { await sleep(200); }
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    try { await request('/api/state'); return; } catch { await sleep(250); }
   }
   throw new Error(`Server did not become ready.\n${serverOutput}`);
 }
 
 try {
+  await seedTemporaryProject();
+  server = spawn(process.execPath, ['server.js'], { env: { ...process.env, PORT: String(port) }, stdio: ['ignore', 'pipe', 'pipe'] });
+  server.stdout.on('data', (chunk) => { serverOutput += chunk; });
+  server.stderr.on('data', (chunk) => { serverOutput += chunk; });
   await waitForServer();
-  before = await request('/api/state');
-  const afterEvent = await request('/api/events', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: testEvent }) });
+  const before = await request('/api/state');
+  const afterEvent = await request('/api/events', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: '검증용 사건: 상자 안에서 진동이 느껴진다.' }) });
   const afterTurn = await request('/api/turns', { method: 'POST' });
-  if (afterEvent.logs.length !== before.logs.length + 1 || afterTurn.logs.length !== afterEvent.logs.length + 1 || afterTurn.logs.at(-1).type !== 'message') throw new Error('API persistence validation failed.');
-  console.log(JSON.stringify({ beforeLogs: before.logs.length, afterEventLogs: afterEvent.logs.length, afterTurnLogs: afterTurn.logs.length, sceneNumber: afterEvent.sceneNumber, turnNumber: afterTurn.turn }, null, 2));
+  if (afterEvent.sceneNumber !== before.sceneNumber + 1 || afterEvent.logs.length !== before.logs.length + 1 || afterEvent.logs.at(-1).type !== 'event') throw new Error('Scene transition validation failed.');
+  if (afterTurn.logs.length !== before.logs.length + 2 || afterTurn.logs.at(-1).type !== 'message' || afterTurn.turn !== before.turn + 1) throw new Error('Turn persistence validation failed.');
+  console.log(JSON.stringify({ beforeScene: before.sceneNumber, afterScene: afterEvent.sceneNumber, afterTurn: afterTurn.turn, signal: afterTurn.sceneSignal }, null, 2));
 } finally {
-  server.kill();
-  if (before) {
-    await pool.query('BEGIN');
-    try {
-      await pool.query('DELETE FROM scene_entries WHERE project_id=$1', ['00000000-0000-4000-8000-000000000001']);
-      for (const [sortOrder, entry] of before.logs.entries()) {
-        if (entry.type === 'event') await pool.query('INSERT INTO scene_entries (id,project_id,entry_type,event_text,sort_order) VALUES ($1,$2,$3,$4,$5)', [randomUUID(), '00000000-0000-4000-8000-000000000001', 'event', entry.text, sortOrder]);
-        else await pool.query('INSERT INTO scene_entries (id,project_id,entry_type,character_id,dialogue,action,sort_order) VALUES ($1,$2,$3,$4,$5,$6,$7)', [randomUUID(), '00000000-0000-4000-8000-000000000001', 'message', entry.characterId, entry.text, entry.action, sortOrder]);
-      }
-      for (const character of before.characters) await pool.query('UPDATE characters SET emotion=$2,updated_at=NOW() WHERE id=$1', [character.id, character.emotion]);
-      await pool.query('UPDATE projects SET title=$2,location=$3,mood=$4,scene_time=$5,description=$6,rules=$7,scene_number=$8,turn_number=$9,director_note=$10,updated_at=NOW() WHERE id=$1', ['00000000-0000-4000-8000-000000000001', before.world.title, before.world.location, before.world.mood, before.world.time, before.world.description, before.world.rules, before.sceneNumber, before.turn, before.directorNote]);
-      await pool.query('COMMIT');
-    } catch (error) {
-      await pool.query('ROLLBACK');
-      throw error;
-    }
-  }
+  server?.kill();
+  await pool.query('DELETE FROM projects WHERE id=$1', [projectId]);
   await pool.end();
 }

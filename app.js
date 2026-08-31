@@ -3,40 +3,67 @@ let editingId = null;
 let autoTimer = null;
 let autoEnabled = false;
 let turnInFlight = false;
+let typingCharacter = null;
+let consecutiveSilentTurns = 0;
+let eventSuggestions = [];
+let autoEventEnabled = false;
+let autoEventInFlight = false;
+let turnsSinceAutoEvent = 0;
+const AUTO_EVENT_TURN_INTERVAL = 6;
+const EVENT_TYPES = ['일상', '관계', '연락', '선택', '발견', '돌발', '시간 전환', '분위기'];
+let selectedAutoEventTypes = new Set(EVENT_TYPES);
+let currentProjectId = new URLSearchParams(window.location.search).get('project');
 const $ = (selector) => document.querySelector(selector);
 const esc = (text) => String(text).replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
 const characterById = (id) => state.characters.find((character) => character.id === id);
+const avatar = (character) => `<span class="avatar" style="background:${character.color}">${character.portraitUrl ? `<img src="${esc(character.portraitUrl)}" style="object-position:${esc(character.portraitPosition || '50%')} center" alt="${esc(character.name)} 얼굴" />` : character.emoji}</span>`;
 
 async function api(url, options = {}) {
-  const response = await fetch(url, { headers: { 'Content-Type': 'application/json' }, ...options });
+  const scopedUrl = currentProjectId && url !== '/api/projects' ? `${url}${url.includes('?') ? '&' : '?'}projectId=${encodeURIComponent(currentProjectId)}` : url;
+  const response = await fetch(scopedUrl, { headers: { 'Content-Type': 'application/json' }, ...options });
   const body = await response.json();
   if (!response.ok) throw new Error(body.error || '요청에 실패했습니다.');
   return body;
 }
-function setState(nextState) { state = nextState; $('#save-status').textContent = 'PostgreSQL 저장됨'; render(); }
+function setState(nextState) { state = nextState; currentProjectId = nextState.projectId; $('#project-select').value = currentProjectId; $('#save-status').textContent = 'PostgreSQL 저장됨'; render(); }
 function renderTurnControls() {
   const advanceButton = $('#advance-button');
   advanceButton.disabled = turnInFlight || !state;
   advanceButton.setAttribute('aria-busy', String(turnInFlight));
-  advanceButton.innerHTML = turnInFlight ? '<span>…</span> 장면 생성 중…' : '<span>✦</span> 다음 장면 진행';
+  advanceButton.innerHTML = turnInFlight ? '<span>…</span> 다음 턴 생성 중…' : '<span>✦</span> 다음 턴 진행';
   const autoButton = $('#auto-button');
   autoButton.classList.toggle('is-active', autoEnabled);
   autoButton.setAttribute('aria-pressed', String(autoEnabled));
   $('#auto-state').textContent = autoEnabled ? 'ON' : 'OFF';
+  const autoEventButton = $('#auto-event-button');
+  autoEventButton.classList.toggle('is-active', autoEventEnabled);
+  autoEventButton.disabled = autoEventInFlight;
+  autoEventButton.setAttribute('aria-pressed', String(autoEventEnabled));
+  $('#auto-event-state').textContent = autoEventInFlight ? '생성 중' : autoEventEnabled ? `${turnsSinceAutoEvent}/${AUTO_EVENT_TURN_INTERVAL}` : 'OFF';
 }
 function render() {
   $('#world-title').textContent = state.world.title; $('#scene-number').textContent = String(state.sceneNumber).padStart(2, '0'); $('#scene-location').textContent = state.world.location; $('#scene-description').textContent = state.world.description; $('#scene-mood').textContent = state.world.mood; $('#director-note').textContent = state.directorNote; renderTurnControls();
-  $('#character-list').innerHTML = state.characters.map((character, index) => `<button class="character ${index === state.turn % state.characters.length ? 'selected' : ''}" data-edit="${character.id}"><span class="avatar" style="background:${character.color}">${character.emoji}</span><span><strong>${esc(character.name)}</strong><small>${esc(character.role)} · ${esc(character.emotion)}</small></span></button>`).join('');
+  $('#character-list').innerHTML = state.characters.map((character, index) => `<button class="character ${(typingCharacter?.id === character.id || (!typingCharacter && index === state.turn % state.characters.length)) ? 'selected' : ''}" data-edit="${character.id}">${avatar(character)}<span><strong>${esc(character.name)}</strong><small>${esc(character.gender)} · ${esc(character.role)}</small><small>${typingCharacter?.id === character.id ? '입력 중…' : esc(character.emotion)}</small></span></button>`).join('');
   document.querySelectorAll('[data-edit]').forEach((button) => { button.onclick = () => openCharacterModal(button.dataset.edit); });
-  $('#conversation-log').innerHTML = state.logs.map((log) => { if (log.type === 'event') return `<div class="message event"><strong>DIRECTOR EVENT</strong>${esc(log.text)}</div>`; const c = characterById(log.characterId); return `<article class="message"><span class="avatar" style="background:${c.color}">${c.emoji}</span><div><div class="message-meta"><span class="message-name">${esc(c.name)}</span><span class="message-role">${esc(c.role)}</span></div><p class="message-text">${esc(log.text)}</p><p class="message-action">${esc(log.action)}</p></div></article>`; }).join('');
+  $('#conversation-log').classList.toggle('chat-mode', state.presentationMode === 'chat');
+  const typingMessage = state.presentationMode === 'chat' && typingCharacter ? `<article class="message typing-message">${avatar(typingCharacter)}<div><div class="message-meta"><span class="message-name">${esc(typingCharacter.name)}</span></div><p class="typing-indicator"><i></i><i></i><i></i><span>입력 중</span></p></div></article>` : '';
+  $('#conversation-log').innerHTML = state.logs.map((log) => { if (log.type === 'event') return `<div class="message event"><strong>DIRECTOR EVENT · ${esc(log.eventType || '일반')}</strong>${esc(log.text)}</div>`; const c = characterById(log.characterId); return `<article class="message">${avatar(c)}<div><div class="message-meta"><span class="message-name">${esc(c.name)}</span><span class="message-role">${esc(c.gender)} · ${esc(c.role)}</span></div><p class="message-text">${esc(log.text)}</p>${log.action ? `<p class="message-action">${esc(log.action)}</p>` : ''}</div></article>`; }).join('') + typingMessage;
   const log = $('#conversation-log'); log.scrollTop = log.scrollHeight;
-  $('#state-list').innerHTML = `<div><dt>TIME</dt><dd>${esc(state.world.time)}</dd></div><div><dt>SCENE GOAL</dt><dd>금서의 정체와 사라진 스승의 단서를 찾는다.</dd></div><div><dt>WORLD RULES</dt><dd>${esc(state.world.rules || '설정된 규칙 없음')}</dd></div>`;
+  $('#state-list').innerHTML = `<div><dt>TIME</dt><dd>${esc(state.world.time)}</dd></div><div><dt>SCENE STATUS</dt><dd>${esc(state.sceneSignal || 'continue')}</dd></div><div><dt>CURRENT SITUATION</dt><dd>${esc(state.world.description)}</dd></div><div><dt>WORLD RULES</dt><dd>${esc(state.world.rules || '설정된 규칙 없음')}</dd></div>`;
   $('#relationship-list').innerHTML = state.relationships.map((r) => `<div class="relationship"><div class="relationship-top"><strong>${esc(characterById(r.from)?.name)} ↔ ${esc(characterById(r.to)?.name)}</strong><span>${r.score}</span></div><span>${esc(r.label)}</span><div class="meter"><i style="width:${r.score}%"></i></div></div>`).join(''); renderSuggestions();
 }
-const suggestions = ['[미스터리] 봉인된 서가 뒤에서 누군가의 발자국이 이어진다.', '[갈등] 교장의 목소리가 들리며, 금서를 가진 사람은 자수하라고 명령한다.', '[관계] 폭풍으로 문이 잠기고 두 명만 보관실에 남는다.'];
-function renderSuggestions() { $('#suggestion-list').innerHTML = suggestions.map((s) => `<button class="suggestion" data-suggestion="${esc(s)}"><b>${s.match(/^\[[^]+?\]/)[0]}</b>${esc(s.replace(/^\[[^]+?\]\s*/, ''))}</button>`).join(''); document.querySelectorAll('[data-suggestion]').forEach((button) => { button.onclick = () => addEvent(button.dataset.suggestion.replace(/^\[[^]+?\]\s*/, '')); }); }
+function renderSuggestions() {
+  $('#suggestion-list').innerHTML = eventSuggestions.length
+    ? eventSuggestions.map((suggestion, index) => `<button class="suggestion" data-suggestion-index="${index}"><b>[${esc(suggestion.category)}${suggestion.time ? ` · ${esc(suggestion.time)}` : ''}]</b>${esc(suggestion.text)}</button>`).join('')
+    : '<span class="suggestion-empty">AI 전개 추천을 누르면 현재 대화에 맞는 사건 10개를 제안합니다.</span>';
+  document.querySelectorAll('[data-suggestion-index]').forEach((button) => { button.onclick = () => { const suggestion = eventSuggestions[Number(button.dataset.suggestionIndex)]; addEvent(suggestion.text, suggestion.time, { eventType: suggestion.category }); }; });
+}
+function renderEventTypeFilters() {
+  $('#event-type-filters').innerHTML = EVENT_TYPES.map((type) => `<label class="event-type-chip"><input type="checkbox" value="${esc(type)}" ${selectedAutoEventTypes.has(type) ? 'checked' : ''}><span>${esc(type)}</span></label>`).join('');
+  $('#event-type-filters').querySelectorAll('input').forEach((input) => { input.onchange = () => { if (input.checked) selectedAutoEventTypes.add(input.value); else selectedAutoEventTypes.delete(input.value); if (!selectedAutoEventTypes.size) { input.checked = true; selectedAutoEventTypes.add(input.value); } }; });
+}
 function stopAutoProgress() { autoEnabled = false; if (autoTimer) clearTimeout(autoTimer); autoTimer = null; }
-function scheduleAutoTurn(delay = 5000) {
+function scheduleAutoTurn(delay = 1000) {
   if (!autoEnabled) return;
   if (autoTimer) clearTimeout(autoTimer);
   autoTimer = setTimeout(async () => {
@@ -51,10 +78,26 @@ function scheduleAutoTurn(delay = 5000) {
 async function advanceTurn() {
   if (turnInFlight || !state) return false;
   turnInFlight = true;
-  $('#save-status').textContent = '장면 생성 중…';
+  $('#save-status').textContent = '다음 턴 생성 중…';
   renderTurnControls();
   try {
-    setState(await api('/api/turns', { method: 'POST' }));
+    typingCharacter = (await api('/api/turns/next-speaker')).character;
+    render();
+    const nextState = await api('/api/turns', { method: 'POST' });
+    typingCharacter = null;
+    setState(nextState);
+    if (nextState.turnOutcome?.spoke) {
+      consecutiveSilentTurns = 0;
+      turnsSinceAutoEvent += 1;
+      await maybeInjectAutomaticEvent();
+    } else {
+      consecutiveSilentTurns += 1;
+      $('#save-status').textContent = `${nextState.turnOutcome?.characterName || '캐릭터'}은(는) 지금은 말하지 않음`;
+      if (autoEnabled && consecutiveSilentTurns >= state.characters.length) {
+        stopAutoProgress();
+        $('#save-status').textContent = '모두 조용함 · 자동 진행 멈춤';
+      }
+    }
     return true;
   } catch (error) {
     stopAutoProgress();
@@ -62,22 +105,89 @@ async function advanceTurn() {
     alert(error.message);
     return false;
   } finally {
+    typingCharacter = null;
     turnInFlight = false;
+    if (state) render();
     renderTurnControls();
   }
 }
-async function addEvent(text) { if (!text.trim()) return; try { setState(await api('/api/events', { method: 'POST', body: JSON.stringify({ text }) })); } catch (error) { alert(error.message); } }
-function openCharacterModal(id) { editingId = id || null; const c = id ? characterById(id) : {}; $('#character-modal-title').textContent = id ? `${c.name} Agent 편집` : '새 캐릭터 만들기'; for (const key of ['name', 'role', 'personality', 'speechStyle', 'goal', 'secret']) $('#character-form').elements[key].value = c[key] || ''; $('#character-modal').showModal(); }
+async function addEvent(text, time = '', { automatic = false, eventType = '일반' } = {}) { if (!text.trim()) return false; try { eventSuggestions = []; setState(await api('/api/events', { method: 'POST', body: JSON.stringify({ text, time, eventType }) })); turnsSinceAutoEvent = 0; return true; } catch (error) { if (automatic) throw error; alert(error.message); return false; } }
+async function maybeInjectAutomaticEvent() {
+  if (!autoEventEnabled || autoEventInFlight || turnsSinceAutoEvent < AUTO_EVENT_TURN_INTERVAL) return;
+  autoEventInFlight = true; $('#save-status').textContent = '자동 사건 생성 중…'; renderTurnControls();
+  try {
+    const desiredTypes = [...selectedAutoEventTypes];
+    const suggestions = (await api('/api/events/suggest', { method: 'POST', body: JSON.stringify({ desiredTypes }) })).suggestions;
+    const eligible = suggestions.filter((suggestion) => selectedAutoEventTypes.has(suggestion.category));
+    if (!eligible.length) throw new Error('선택한 방향에 맞는 사건이 생성되지 않았습니다.');
+    const suggestion = eligible[Math.floor(Math.random() * eligible.length)];
+    await addEvent(suggestion.text, suggestion.time, { automatic: true, eventType: suggestion.category });
+    $('#save-status').textContent = `자동 사건 투입됨 · ${suggestion.category}`;
+  } catch (error) {
+    autoEventEnabled = false;
+    $('#save-status').textContent = '자동 사건 실패';
+    alert(`자동 사건 투입을 중지했습니다.\n${error.message}`);
+  } finally { autoEventInFlight = false; renderTurnControls(); }
+}
+function openCharacterModal(id) { editingId = id || null; const c = id ? characterById(id) : {}; $('#character-modal-title').textContent = id ? `${c.name} Agent 편집` : '새 캐릭터 만들기'; for (const key of ['name', 'gender', 'role', 'personality', 'speechStyle', 'goal', 'secret']) $('#character-form').elements[key].value = c[key] || (key === 'gender' ? '여성' : ''); $('#character-modal').showModal(); }
 async function saveCharacter() { const form = $('#character-form'); if (!form.reportValidity()) return; try { setState(await api(editingId ? `/api/characters/${editingId}` : '/api/characters', { method: editingId ? 'PUT' : 'POST', body: JSON.stringify(Object.fromEntries(new FormData(form))) })); $('#character-modal').close(); } catch (error) { alert(error.message); } }
 function openWorldModal() { const form = $('#world-form'); Object.entries(state.world).forEach(([key, value]) => { form.elements[key].value = value; }); $('#world-modal').showModal(); }
 async function saveWorld() { const form = $('#world-form'); if (!form.reportValidity()) return; try { setState(await api('/api/world', { method: 'PUT', body: JSON.stringify(Object.fromEntries(new FormData(form))) })); $('#world-modal').close(); } catch (error) { alert(error.message); } }
 
 $('#advance-button').onclick = advanceTurn;
 $('#auto-button').onclick = () => { if (autoEnabled) stopAutoProgress(); else { autoEnabled = true; scheduleAutoTurn(0); } renderTurnControls(); };
+$('#auto-event-button').onclick = () => { autoEventEnabled = !autoEventEnabled; if (!autoEventEnabled) turnsSinceAutoEvent = 0; renderTurnControls(); };
 $('#open-character-modal').onclick = () => openCharacterModal(); $('#open-world-modal').onclick = openWorldModal;
-$('#event-form').onsubmit = (event) => { event.preventDefault(); addEvent($('#event-input').value); $('#event-input').value = ''; };
+$('#event-form').onsubmit = (event) => { event.preventDefault(); addEvent($('#event-input').value, '', { eventType: $('#event-type-select').value }); $('#event-input').value = ''; };
+$('#suggest-button').onclick = async () => {
+  const button = $('#suggest-button');
+  button.disabled = true; button.textContent = '✦ 사건 생성 중…';
+  $('#suggestion-list').innerHTML = '<span class="suggestion-empty">현재 장면과 최근 대화를 읽고 있습니다…</span>';
+  try { eventSuggestions = (await api('/api/events/suggest', { method: 'POST', body: JSON.stringify({}) })).suggestions; renderSuggestions(); }
+  catch (error) { eventSuggestions = []; renderSuggestions(); alert(`사건 추천에 실패했습니다.\n${error.message}`); }
+  finally { button.disabled = false; button.textContent = '✦ AI 전개 추천'; }
+};
 $('#character-form').onsubmit = (event) => { event.preventDefault(); saveCharacter(); }; $('#world-form').onsubmit = (event) => { event.preventDefault(); saveWorld(); };
-$('#ai-character-button').onclick = () => { const f = $('#character-form'); f.elements.name.value = '아린'; f.elements.role.value = '별자리 연구자'; f.elements.personality.value = '침착함, 예리함, 은근한 유머'; f.elements.speechStyle.value = '낮고 느긋한 말투로 핵심을 짚는다.'; f.elements.goal.value = '자신만의 단서를 해독한다.'; f.elements.secret.value = '사건과 관련된 오래된 약속을 알고 있다.'; };
+$('#ai-character-button').onclick = async () => {
+  const button = $('#ai-character-button');
+  const form = $('#character-form');
+  button.disabled = true;
+  button.textContent = '✦ 현재 장면 분석 중…';
+  try {
+    const suggestion = await api('/api/characters/suggest', { method: 'POST' });
+    for (const field of ['name', 'gender', 'role', 'personality', 'speechStyle', 'goal', 'secret']) form.elements[field].value = suggestion[field];
+  } catch (error) {
+    alert(`캐릭터 추천에 실패했습니다.\n${error.message}`);
+  } finally {
+    button.disabled = false;
+    button.textContent = '✦ 현재 장면 기반 추천';
+  }
+};
 document.querySelectorAll('[data-close]').forEach((button) => { button.onclick = () => $(`#${button.dataset.close}`).close(); });
 $('#reset-button').style.display = 'none';
-api('/api/state').then(setState).catch((error) => { $('#save-status').textContent = 'DB 설정 필요'; alert(`${error.message}\n\nREADME의 PostgreSQL 설정 단계를 실행하세요.`); });
+async function selectProject(projectId) {
+  stopAutoProgress();
+  eventSuggestions = [];
+  turnsSinceAutoEvent = 0;
+  currentProjectId = projectId;
+  const url = new URL(window.location.href);
+  url.searchParams.set('project', projectId);
+  window.history.replaceState({}, '', url);
+  $('#save-status').textContent = '세계관 불러오는 중…';
+  setState(await api('/api/state'));
+}
+async function initialize() {
+  try {
+    const projects = await api('/api/projects');
+    if (!projects.length) throw new Error('등록된 세계관이 없습니다.');
+    $('#project-select').innerHTML = projects.map((project) => `<option value="${esc(project.id)}">${esc(project.title)} · ${esc(project.mood)}</option>`).join('');
+    if (!projects.some((project) => project.id === currentProjectId)) currentProjectId = projects[0].id;
+    $('#project-select').onchange = (event) => selectProject(event.target.value).catch((error) => { $('#save-status').textContent = '전환 실패'; alert(error.message); });
+    await selectProject(currentProjectId);
+  } catch (error) {
+    $('#save-status').textContent = 'DB 설정 필요';
+    alert(`${error.message}\n\nREADME의 PostgreSQL 설정 단계를 실행하세요.`);
+  }
+}
+initialize();
+renderEventTypeFilters();

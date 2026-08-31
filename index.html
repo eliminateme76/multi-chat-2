@@ -9,13 +9,14 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Gowun+Dodum&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./project-switcher.css" />
   </head>
   <body>
     <main class="app-shell">
       <header class="topbar">
         <a class="brand" href="#top" aria-label="Sceneweaver 홈"><span class="brand-mark">✦</span><span>SCENEWEAVER</span></a>
-        <div class="world-heading"><span class="eyebrow">현재 세계</span><h1 id="world-title">별빛 마도학원</h1></div>
-        <div class="top-actions"><span id="save-status" class="save-status">자동 저장됨</span><button id="reset-button" class="icon-button" title="데모 초기화" aria-label="데모 초기화">↺</button></div>
+        <div class="world-heading"><label class="eyebrow" for="project-select">현재 세계</label><select id="project-select" aria-label="세계관 선택"></select><h1 id="world-title" class="sr-only">별빛 마도학원</h1></div>
+        <div class="top-actions"><span id="save-status" class="save-status">자동 저장됨</span><a href="./monitor.html" class="icon-button" title="실행 모니터" aria-label="실행 모니터">⌁</a><button id="reset-button" class="icon-button" title="데모 초기화" aria-label="데모 초기화">↺</button></div>
       </header>
 
       <section class="stage" id="top">
@@ -34,8 +35,9 @@
           </div>
           <div id="conversation-log" class="conversation-log" aria-live="polite"></div>
           <div class="conversation-controls">
-            <button id="advance-button" class="primary-button"><span>✦</span> 다음 장면 진행</button>
+            <button id="advance-button" class="primary-button"><span>✦</span> 다음 턴 진행</button>
             <button id="auto-button" class="secondary-button">자동 진행 <span id="auto-state">OFF</span></button>
+            <button id="auto-event-button" class="secondary-button" title="6턴마다 AI 사건을 자동 투입합니다">자동 사건 <span id="auto-event-state">OFF</span></button>
           </div>
         </section>
 
@@ -50,14 +52,16 @@
       <section class="intervention panel">
         <div class="intervention-heading"><div><span class="eyebrow">DIRECTOR INTERVENTION</span><h2>이야기에 변화를 주세요</h2></div><button id="suggest-button" class="text-button">✦ AI 전개 추천</button></div>
         <div id="suggestion-list" class="suggestion-list"></div>
+        <div class="event-direction"><span>자동 사건 방향</span><div id="event-type-filters" class="event-type-filters"></div></div>
         <form id="event-form" class="event-form">
+          <label class="sr-only" for="event-type-select">사건 타입</label><select id="event-type-select"><option>일상</option><option>관계</option><option>연락</option><option>선택</option><option>발견</option><option>돌발</option><option>시간 전환</option><option>분위기</option><option>일반</option></select>
           <label class="sr-only" for="event-input">새로운 사건</label><input id="event-input" maxlength="180" placeholder="예: 정체불명의 편지가 창문을 깨고 날아든다." />
           <button class="event-submit" type="submit">사건 투입 <span>→</span></button>
         </form>
       </section>
     </main>
 
-    <dialog id="character-modal" class="modal"><form id="character-form" method="dialog" class="modal-card"><div class="modal-header"><div><span class="eyebrow">CHARACTER AGENT</span><h2 id="character-modal-title">새 캐릭터 만들기</h2></div><button type="button" class="close-button" data-close="character-modal">×</button></div><div class="form-grid"><label>이름<input name="name" required maxlength="20" /></label><label>역할<input name="role" required maxlength="40" placeholder="예: 마법 기사 견습생" /></label><label class="full">성격<input name="personality" required maxlength="120" placeholder="쉼표로 구분해 입력" /></label><label class="full">말투<input name="speechStyle" required maxlength="120" /></label><label>목표<input name="goal" required maxlength="120" /></label><label>비밀<input name="secret" required maxlength="120" /></label></div><div class="modal-footer"><button type="button" id="ai-character-button" class="secondary-button">✦ AI 초안 채우기</button><button class="primary-button" value="default">저장하기</button></div></form></dialog>
+    <dialog id="character-modal" class="modal"><form id="character-form" method="dialog" class="modal-card"><div class="modal-header"><div><span class="eyebrow">CHARACTER AGENT</span><h2 id="character-modal-title">새 캐릭터 만들기</h2></div><button type="button" class="close-button" data-close="character-modal">×</button></div><div class="form-grid"><label>이름<input name="name" required maxlength="20" /></label><label>성별<select name="gender" required><option value="여성">여성</option><option value="남성">남성</option><option value="논바이너리">논바이너리</option><option value="성별 없음">성별 없음</option></select></label><label class="full">역할<input name="role" required maxlength="40" placeholder="예: 마법 기사 견습생" /></label><label class="full">성격<input name="personality" required maxlength="120" placeholder="쉼표로 구분해 입력" /></label><label class="full">말투<input name="speechStyle" required maxlength="120" /></label><label>목표<input name="goal" required maxlength="120" /></label><label>비밀<input name="secret" required maxlength="120" /></label></div><div class="modal-footer"><button type="button" id="ai-character-button" class="secondary-button">✦ 현재 장면 기반 추천</button><button class="primary-button" value="default">저장하기</button></div></form></dialog>
 
     <dialog id="world-modal" class="modal"><form id="world-form" method="dialog" class="modal-card"><div class="modal-header"><div><span class="eyebrow">WORLD BIBLE</span><h2>세계관과 장면 편집</h2></div><button type="button" class="close-button" data-close="world-modal">×</button></div><div class="form-grid"><label>세계 이름<input name="title" required maxlength="50" /></label><label>현재 장소<input name="location" required maxlength="70" /></label><label>분위기<input name="mood" required maxlength="70" /></label><label>시간<input name="time" required maxlength="40" /></label><label class="full">장면 설명<textarea name="description" required maxlength="300"></textarea></label><label class="full">세계 규칙<textarea name="rules" required maxlength="300" placeholder="쉼표로 구분해 입력"></textarea></label></div><div class="modal-footer"><button class="primary-button" value="default">변경 저장</button></div></form></dialog>
     <script src="./app.js"></script>

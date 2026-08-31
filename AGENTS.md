@@ -39,15 +39,16 @@ Browser (index.html + app.js)
 ### Critical behavior
 
 - `POST /api/turns` selects the next character from `turn_number`.
-- `codex-client.js` builds that character's prompt from their profile, current emotion, their relationships, current world/scene data, and only the recent **public** logs.
-- The model must return JSON with `dialogue`, `action`, and `emotion`.
-- Only after a successful Codex response does the server insert a scene entry and update emotion/turn number in PostgreSQL.
+- `story-engine.js` selects the speaker and loads the active scene plus that character's private memories.
+- `context-builder.js` builds a bounded prompt from the active character card, related relationships, private memories, scene summary, and only recent **public** logs.
+- The model returns structured dialogue/action/emotion plus optional memory, relationship changes, and a scene progress signal.
+- Only after validation does one PostgreSQL transaction persist the public entry and allowed state changes.
 - Do not expose Codex auth details or app-server directly to the browser.
 - Do not silently replace Codex failures with hard-coded dialogue. Return an API error instead.
 
 ## Codex app-server protocol currently used
 
-`codex-client.js` starts an app-server process per scene turn and sends JSONL JSON-RPC over stdio:
+`codex-client.js` keeps one app-server process alive and sends serialized JSONL JSON-RPC requests over stdio. Each generation still starts a fresh thread so LLM thread state is never authoritative:
 
 1. `initialize`
 2. `initialized`
@@ -55,7 +56,7 @@ Browser (index.html + app.js)
 4. `turn/start` with an `outputSchema`
 5. Parse the `turn/completed` notification's final `agentMessage` JSON
 
-The current implementation intentionally creates a fresh thread per turn. Persistent story memory belongs in PostgreSQL, not in Codex thread history. Reusing a process/thread is a future performance optimization; preserve the information isolation rules if implementing it.
+Persistent story memory belongs in PostgreSQL, not in Codex thread history. See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for boundaries, visibility rules, and the turn lifecycle.
 
 ## Useful commands
 
@@ -69,7 +70,7 @@ npm run db:setup
 # Reset current demo conversation to its 3 initial messages
 npm run reset:demo
 
-# API persistence check (starts a temporary server; use when port 3000 is free)
+# API persistence check (uses a disposable project and temporary port 3101)
 npm run verify:api
 
 # Check database availability
@@ -78,11 +79,11 @@ pg_isready
 
 ## Current known limitations / next priorities
 
-1. Character/world "AI 초안 채우기" is still local hard-coded UI content, not Codex generated.
-2. `relationshipChanges` and director decisions are not yet requested or persisted from Codex output.
-3. App-server starts once per turn, so generation has process startup overhead.
-4. Only one fixed demo project ID is supported; implement projects list/create and route-level project IDs before multi-project work.
-5. Auto-progress can create requests every 5 seconds; keep it off while debugging and consider an in-flight request lock.
+1. Character suggestions use Codex, but world/event suggestions are still generic UI templates.
+2. Memory retrieval currently uses importance and recency; semantic retrieval and consolidation are deferred.
+3. Scene progress signals update public direction, but a separate LLM Director is not yet invoked for transitions.
+4. Projects can be selected, but project creation/deletion UI is not implemented.
+5. Auto-progress is browser-owned; a production runner should use server-side jobs and SSE.
 
 ## Conventions
 
