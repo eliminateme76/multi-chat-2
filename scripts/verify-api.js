@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 
 const baseUrl = 'http://127.0.0.1:3000';
@@ -8,6 +9,7 @@ const { Pool } = pg;
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const server = spawn(process.execPath, ['server.js'], { stdio: ['ignore', 'pipe', 'pipe'] });
 let serverOutput = '';
+let before;
 server.stdout.on('data', (chunk) => { serverOutput += chunk; });
 server.stderr.on('data', (chunk) => { serverOutput += chunk; });
 const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -21,15 +23,28 @@ async function waitForServer() {
 
 try {
   await waitForServer();
-  const before = await request('/api/state');
+  before = await request('/api/state');
   const afterEvent = await request('/api/events', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: testEvent }) });
   const afterTurn = await request('/api/turns', { method: 'POST' });
   if (afterEvent.logs.length !== before.logs.length + 1 || afterTurn.logs.length !== afterEvent.logs.length + 1 || afterTurn.logs.at(-1).type !== 'message') throw new Error('API persistence validation failed.');
   console.log(JSON.stringify({ beforeLogs: before.logs.length, afterEventLogs: afterEvent.logs.length, afterTurnLogs: afterTurn.logs.length, sceneNumber: afterEvent.sceneNumber, turnNumber: afterTurn.turn }, null, 2));
 } finally {
   server.kill();
-  await pool.query('DELETE FROM scene_entries WHERE event_text=$1', [testEvent]);
-  await pool.query('DELETE FROM scene_entries WHERE project_id=$1 AND sort_order >= 3', ['00000000-0000-4000-8000-000000000001']);
-  await pool.query("UPDATE projects SET scene_number=1,turn_number=0,description='늦은 밤. 폭풍우가 창을 두드리고, 오래된 마법서가 희미하게 빛난다.',director_note='세라의 비밀을 둘러싼 긴장을 유지하세요. 루카에게는 아직 확실한 증거가 없습니다.' WHERE id='00000000-0000-4000-8000-000000000001'");
+  if (before) {
+    await pool.query('BEGIN');
+    try {
+      await pool.query('DELETE FROM scene_entries WHERE project_id=$1', ['00000000-0000-4000-8000-000000000001']);
+      for (const [sortOrder, entry] of before.logs.entries()) {
+        if (entry.type === 'event') await pool.query('INSERT INTO scene_entries (id,project_id,entry_type,event_text,sort_order) VALUES ($1,$2,$3,$4,$5)', [randomUUID(), '00000000-0000-4000-8000-000000000001', 'event', entry.text, sortOrder]);
+        else await pool.query('INSERT INTO scene_entries (id,project_id,entry_type,character_id,dialogue,action,sort_order) VALUES ($1,$2,$3,$4,$5,$6,$7)', [randomUUID(), '00000000-0000-4000-8000-000000000001', 'message', entry.characterId, entry.text, entry.action, sortOrder]);
+      }
+      for (const character of before.characters) await pool.query('UPDATE characters SET emotion=$2,updated_at=NOW() WHERE id=$1', [character.id, character.emotion]);
+      await pool.query('UPDATE projects SET title=$2,location=$3,mood=$4,scene_time=$5,description=$6,rules=$7,scene_number=$8,turn_number=$9,director_note=$10,updated_at=NOW() WHERE id=$1', ['00000000-0000-4000-8000-000000000001', before.world.title, before.world.location, before.world.mood, before.world.time, before.world.description, before.world.rules, before.sceneNumber, before.turn, before.directorNote]);
+      await pool.query('COMMIT');
+    } catch (error) {
+      await pool.query('ROLLBACK');
+      throw error;
+    }
+  }
   await pool.end();
 }

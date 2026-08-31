@@ -1,6 +1,8 @@
 let state;
 let editingId = null;
 let autoTimer = null;
+let autoEnabled = false;
+let turnInFlight = false;
 const $ = (selector) => document.querySelector(selector);
 const esc = (text) => String(text).replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
 const characterById = (id) => state.characters.find((character) => character.id === id);
@@ -12,8 +14,18 @@ async function api(url, options = {}) {
   return body;
 }
 function setState(nextState) { state = nextState; $('#save-status').textContent = 'PostgreSQL 저장됨'; render(); }
+function renderTurnControls() {
+  const advanceButton = $('#advance-button');
+  advanceButton.disabled = turnInFlight || !state;
+  advanceButton.setAttribute('aria-busy', String(turnInFlight));
+  advanceButton.innerHTML = turnInFlight ? '<span>…</span> 장면 생성 중…' : '<span>✦</span> 다음 장면 진행';
+  const autoButton = $('#auto-button');
+  autoButton.classList.toggle('is-active', autoEnabled);
+  autoButton.setAttribute('aria-pressed', String(autoEnabled));
+  $('#auto-state').textContent = autoEnabled ? 'ON' : 'OFF';
+}
 function render() {
-  $('#world-title').textContent = state.world.title; $('#scene-number').textContent = String(state.sceneNumber).padStart(2, '0'); $('#scene-location').textContent = state.world.location; $('#scene-description').textContent = state.world.description; $('#scene-mood').textContent = state.world.mood; $('#director-note').textContent = state.directorNote; $('#auto-state').textContent = autoTimer ? 'ON' : 'OFF';
+  $('#world-title').textContent = state.world.title; $('#scene-number').textContent = String(state.sceneNumber).padStart(2, '0'); $('#scene-location').textContent = state.world.location; $('#scene-description').textContent = state.world.description; $('#scene-mood').textContent = state.world.mood; $('#director-note').textContent = state.directorNote; renderTurnControls();
   $('#character-list').innerHTML = state.characters.map((character, index) => `<button class="character ${index === state.turn % state.characters.length ? 'selected' : ''}" data-edit="${character.id}"><span class="avatar" style="background:${character.color}">${character.emoji}</span><span><strong>${esc(character.name)}</strong><small>${esc(character.role)} · ${esc(character.emotion)}</small></span></button>`).join('');
   document.querySelectorAll('[data-edit]').forEach((button) => { button.onclick = () => openCharacterModal(button.dataset.edit); });
   $('#conversation-log').innerHTML = state.logs.map((log) => { if (log.type === 'event') return `<div class="message event"><strong>DIRECTOR EVENT</strong>${esc(log.text)}</div>`; const c = characterById(log.characterId); return `<article class="message"><span class="avatar" style="background:${c.color}">${c.emoji}</span><div><div class="message-meta"><span class="message-name">${esc(c.name)}</span><span class="message-role">${esc(c.role)}</span></div><p class="message-text">${esc(log.text)}</p><p class="message-action">${esc(log.action)}</p></div></article>`; }).join('');
@@ -23,7 +35,37 @@ function render() {
 }
 const suggestions = ['[미스터리] 봉인된 서가 뒤에서 누군가의 발자국이 이어진다.', '[갈등] 교장의 목소리가 들리며, 금서를 가진 사람은 자수하라고 명령한다.', '[관계] 폭풍으로 문이 잠기고 두 명만 보관실에 남는다.'];
 function renderSuggestions() { $('#suggestion-list').innerHTML = suggestions.map((s) => `<button class="suggestion" data-suggestion="${esc(s)}"><b>${s.match(/^\[[^]+?\]/)[0]}</b>${esc(s.replace(/^\[[^]+?\]\s*/, ''))}</button>`).join(''); document.querySelectorAll('[data-suggestion]').forEach((button) => { button.onclick = () => addEvent(button.dataset.suggestion.replace(/^\[[^]+?\]\s*/, '')); }); }
-async function advanceTurn() { try { setState(await api('/api/turns', { method: 'POST' })); } catch (error) { alert(error.message); } }
+function stopAutoProgress() { autoEnabled = false; if (autoTimer) clearTimeout(autoTimer); autoTimer = null; }
+function scheduleAutoTurn(delay = 5000) {
+  if (!autoEnabled) return;
+  if (autoTimer) clearTimeout(autoTimer);
+  autoTimer = setTimeout(async () => {
+    autoTimer = null;
+    if (!autoEnabled) return;
+    if (turnInFlight) return scheduleAutoTurn(500);
+    const completed = await advanceTurn();
+    if (autoEnabled && completed) scheduleAutoTurn();
+  }, delay);
+  renderTurnControls();
+}
+async function advanceTurn() {
+  if (turnInFlight || !state) return false;
+  turnInFlight = true;
+  $('#save-status').textContent = '장면 생성 중…';
+  renderTurnControls();
+  try {
+    setState(await api('/api/turns', { method: 'POST' }));
+    return true;
+  } catch (error) {
+    stopAutoProgress();
+    $('#save-status').textContent = '진행 실패';
+    alert(error.message);
+    return false;
+  } finally {
+    turnInFlight = false;
+    renderTurnControls();
+  }
+}
 async function addEvent(text) { if (!text.trim()) return; try { setState(await api('/api/events', { method: 'POST', body: JSON.stringify({ text }) })); } catch (error) { alert(error.message); } }
 function openCharacterModal(id) { editingId = id || null; const c = id ? characterById(id) : {}; $('#character-modal-title').textContent = id ? `${c.name} Agent 편집` : '새 캐릭터 만들기'; for (const key of ['name', 'role', 'personality', 'speechStyle', 'goal', 'secret']) $('#character-form').elements[key].value = c[key] || ''; $('#character-modal').showModal(); }
 async function saveCharacter() { const form = $('#character-form'); if (!form.reportValidity()) return; try { setState(await api(editingId ? `/api/characters/${editingId}` : '/api/characters', { method: editingId ? 'PUT' : 'POST', body: JSON.stringify(Object.fromEntries(new FormData(form))) })); $('#character-modal').close(); } catch (error) { alert(error.message); } }
@@ -31,7 +73,7 @@ function openWorldModal() { const form = $('#world-form'); Object.entries(state.
 async function saveWorld() { const form = $('#world-form'); if (!form.reportValidity()) return; try { setState(await api('/api/world', { method: 'PUT', body: JSON.stringify(Object.fromEntries(new FormData(form))) })); $('#world-modal').close(); } catch (error) { alert(error.message); } }
 
 $('#advance-button').onclick = advanceTurn;
-$('#auto-button').onclick = () => { if (autoTimer) { clearInterval(autoTimer); autoTimer = null; } else autoTimer = setInterval(advanceTurn, 5000); render(); };
+$('#auto-button').onclick = () => { if (autoEnabled) stopAutoProgress(); else { autoEnabled = true; scheduleAutoTurn(0); } renderTurnControls(); };
 $('#open-character-modal').onclick = () => openCharacterModal(); $('#open-world-modal').onclick = openWorldModal;
 $('#event-form').onsubmit = (event) => { event.preventDefault(); addEvent($('#event-input').value); $('#event-input').value = ''; };
 $('#character-form').onsubmit = (event) => { event.preventDefault(); saveCharacter(); }; $('#world-form').onsubmit = (event) => { event.preventDefault(); saveWorld(); };
