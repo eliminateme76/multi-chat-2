@@ -133,6 +133,18 @@ function observedThreads() {
 
 function renderTraceTimeline() {
   const runs = selectedRuns().slice(0, 200).toReversed();
+  const ribbon = $('#trace-ribbon');
+  const ribbonWasPinned = ribbon.scrollLeft + ribbon.clientWidth >= ribbon.scrollWidth - 12;
+  ribbon.innerHTML = runs.map((run) => {
+    const stageBlocks = (run.stages || []).map((stage) => {
+      const stageDuration = stage.durationMs ?? Date.now() - Date.parse(stage.startedAt);
+      const width = Math.max(48, Math.round(stageDuration / 1000 * 22));
+      const stageClass = stage.name.replaceAll('_', '-');
+      return `<div class="trace-stage ${stageClass} ${stage.status}" style="width:${width}px" title="${esc(runLabel(run.type))} · ${esc(labelFor(stage.name))} · ${ms(stageDuration)}"><strong>${esc(labelFor(stage.name))}</strong><span>${ms(stageDuration)}</span></div>`;
+    }).join('');
+    return `<div class="trace-ribbon-run"><span>${esc(runLabel(run.type))}</span>${stageBlocks}</div>`;
+  }).join('') || '<div class="empty">실행을 기다리고 있습니다.</div>';
+  if (ribbonWasPinned) ribbon.scrollLeft = ribbon.scrollWidth;
   $('#trace-timeline').innerHTML = runs.length ? runs.map((run) => {
     const total = run.durationMs ?? Date.now() - Date.parse(run.startedAt);
     const stageBlocks = (run.stages || []).map((stage) => {
