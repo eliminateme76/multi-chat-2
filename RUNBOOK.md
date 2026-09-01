@@ -14,8 +14,11 @@ cp .env.example .env
 npm install
 npm run db:setup
 npm install -g @openai/codex@latest
-codex login
+mkdir -p "$HOME/.codex-sceneweaver"
+CODEX_HOME="$HOME/.codex-sceneweaver" codex login
 ```
+
+Set `SCENEWEAVER_CODEX_HOME` in `.env` to the absolute path printed by `cd "$HOME/.codex-sceneweaver" && pwd`. This keeps app-server sessions separate from the interactive CLI session list.
 
 The `CREATE USER` and `CREATE DATABASE` commands are needed only once. If they report that the resource already exists, continue.
 
@@ -24,7 +27,8 @@ The `CREATE USER` and `CREATE DATABASE` commands are needed only once. If they r
 ```bash
 cd /mnt/c/Users/user/Documents/GitHub/multi-ai-chat
 sudo service postgresql start
-codex login status
+set -a; . ./.env; set +a
+CODEX_HOME="$SCENEWEAVER_CODEX_HOME" codex login status
 npm run dev
 ```
 
@@ -42,7 +46,8 @@ Then use `http://<first-WSL-IP>:3000` in the Windows browser. The WSL IP can cha
 pg_isready
 curl http://127.0.0.1:3000/api/state
 codex --version
-codex login status
+set -a; . ./.env; set +a
+CODEX_HOME="$SCENEWEAVER_CODEX_HOME" codex login status
 ```
 
 ## Reset story data
@@ -69,14 +74,17 @@ npm run dev
 
 ```bash
 codex --version
-codex login status
+set -a; . ./.env; set +a
+CODEX_HOME="$SCENEWEAVER_CODEX_HOME" codex login status
 ```
 
 Install/update and authenticate inside WSL if needed:
 
 ```bash
 npm install -g @openai/codex@latest
-codex login
+set -a; . ./.env; set +a
+mkdir -p "$SCENEWEAVER_CODEX_HOME"
+CODEX_HOME="$SCENEWEAVER_CODEX_HOME" codex login
 ```
 
 ### Repeated turns appear unexpectedly

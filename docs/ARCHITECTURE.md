@@ -8,14 +8,14 @@ The first production-oriented design combines the character-card swap pattern us
 
 ```text
 StoryRunner
-  -> SpeakerSelector
+  -> ResponderSelector (one structured AI selection per progression)
   -> ContextBuilder
        -> public world and active scene
        -> active character card and private facts
        -> relationships involving that character
        -> relevant private memories
        -> recent public group messages
-  -> Codex app-server (one process, fresh thread per request)
+  -> Codex app-server (one process, one active reusable thread per WorldCharacter)
   -> OutputValidator
   -> StateUpdater (one PostgreSQL transaction)
 ```
@@ -28,10 +28,13 @@ PostgreSQL owns all durable state:
 - `scenes`: time, location, public direction, private director state, summary and progress signal
 - `characters`: character card, private goal/secret and current emotion
 - `relationships`: directed relationship labels and scores
-- `scene_entries`: append-only public group messages and events
+- `scene_entries`: ordered Events with actor and visibility metadata
+- `scene_participants`: per-Scene presence windows
+- `scene_entry_recipients`: immutable per-event visibility snapshots
+- `world_operations`: durable infrastructure queue, not story-domain session state
 - `character_memories`: private observations available only to their owner
 
-Codex owns no authoritative state. The app-server process is reused to avoid process startup overhead, while a fresh thread is created for each generation. A future implementation may reuse threads, but it must remain possible to rebuild every prompt from PostgreSQL.
+Codex owns no authoritative state. A WorldCharacter stores one active thread id in PostgreSQL. It starts on that character's first response, resumes after app-server reconnects, and is rebuilt from PostgreSQL if unavailable. Suggestion calls remain one-shot and are deleted after completion.
 
 ## Visibility model
 
@@ -88,6 +91,8 @@ A future Director may run only on explicit events, scene completion or repeated 
 ## Performance and failure behavior
 
 - One Codex app-server process is reused.
+- App-server config, authentication, logs and sessions are isolated under `SCENEWEAVER_CODEX_HOME`.
+- Completed one-shot threads are unsubscribed and deleted so they do not accumulate in Codex session listings.
 - Generation requests are serialized because story state is order-dependent.
 - Every request uses a bounded context.
 - A timeout destroys the unhealthy app-server; the next request starts a new one.

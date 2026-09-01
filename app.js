@@ -81,12 +81,21 @@ async function advanceTurn() {
   $('#save-status').textContent = '다음 턴 생성 중…';
   renderTurnControls();
   try {
-    typingCharacter = (await api('/api/turns/next-speaker')).character;
+    const participants = (await api('/api/participants')).participants;
+    typingCharacter = participants[0] || null;
     render();
-    const nextState = await api('/api/turns', { method: 'POST' });
+    const queued = await api('/api/turns', { method: 'POST' });
+    let operation;
+    for (let attempt = 0; attempt < 240; attempt += 1) {
+      operation = await api(`/api/operations/${queued.operationId}`);
+      if (operation.status === 'COMPLETED' || operation.status === 'FAILED') break;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    if (!operation || operation.status !== 'COMPLETED') throw new Error(operation?.error || '진행 작업이 완료되지 않았습니다.');
+    const nextState = await api('/api/state');
     typingCharacter = null;
     setState(nextState);
-    if (nextState.turnOutcome?.spoke) {
+    if (nextState.logs.length) {
       consecutiveSilentTurns = 0;
       turnsSinceAutoEvent += 1;
       await maybeInjectAutomaticEvent();

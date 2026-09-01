@@ -9,11 +9,12 @@ Sceneweaver is a Korean interactive story simulator. Users create a world and ch
 - Run application commands inside **WSL Ubuntu**, not native Windows Node.js.
 - Repository path in WSL: `/mnt/c/Users/user/Documents/GitHub/multi-ai-chat`
 - PostgreSQL runs inside WSL and is reached through the `DATABASE_URL` in `.env`.
-- Codex CLI must be installed and authenticated in the same WSL user that runs Node:
+- Codex CLI must be installed and authenticated in the app-specific `SCENEWEAVER_CODEX_HOME` under the same WSL user that runs Node:
 
   ```bash
   codex --version
-  codex login status
+  set -a; . ./.env; set +a
+  CODEX_HOME="$SCENEWEAVER_CODEX_HOME" codex login status
   ```
 
 ## Start locally
@@ -48,13 +49,14 @@ Browser (index.html + app.js)
 
 ## Codex app-server protocol currently used
 
-`codex-client.js` keeps one app-server process alive and sends serialized JSONL JSON-RPC requests over stdio. Each generation still starts a fresh thread so LLM thread state is never authoritative:
+`codex-client.js` keeps one app-server process alive under the isolated `SCENEWEAVER_CODEX_HOME` and sends serialized JSONL JSON-RPC requests over stdio. Character turns reuse each WorldCharacter's persisted thread id; suggestion calls remain one-shot:
 
 1. `initialize`
 2. `initialized`
-3. `thread/start` with `model`, `cwd`, `approvalPolicy: "never"`, `sandbox: "read-only"`
+3. `thread/start` on first use or `thread/resume` after reconnect
 4. `turn/start` with an `outputSchema`
 5. Parse the `turn/completed` notification's final `agentMessage` JSON
+6. Persist the successful character Event, cursor and thread link together
 
 Persistent story memory belongs in PostgreSQL, not in Codex thread history. See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for boundaries, visibility rules, and the turn lifecycle.
 

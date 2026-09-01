@@ -4,11 +4,11 @@ import { endStage, failStage, recordStage, setRuntimeResource, startStage } from
 
 const CODEX_MODEL = process.env.CODEX_MODEL || 'gpt-5.6-sol';
 const TIMEOUT_MS = Number(process.env.CODEX_TURN_TIMEOUT_MS || 120000);
+const APP_SERVER_CODEX_HOME = process.env.SCENEWEAVER_CODEX_HOME?.trim();
 
 const turnSchema = {
   type: 'object',
   properties: {
-    shouldRespond: { type: 'boolean' },
     dialogue: { type: 'string' }, action: { type: 'string' }, emotion: { type: 'string' },
     memory: { type: 'string' }, memoryImportance: { type: 'integer', minimum: 0, maximum: 100 },
     relationshipChanges: {
@@ -21,8 +21,14 @@ const turnSchema = {
     },
     sceneSignal: { type: 'string', enum: ['continue', 'stalled', 'complete'] }
   },
-  required: ['shouldRespond', 'dialogue', 'action', 'emotion', 'memory', 'memoryImportance', 'relationshipChanges', 'sceneSignal'],
+  required: ['dialogue', 'action', 'emotion', 'memory', 'memoryImportance', 'relationshipChanges', 'sceneSignal'],
   additionalProperties: false
+};
+
+const responderSchema = {
+  type: 'object', properties: {
+    responders: { type: 'array', items: { type: 'object', properties: { characterId: { type: 'string' }, reason: { type: 'string' } }, required: ['characterId','reason'], additionalProperties: false } }
+  }, required: ['responders'], additionalProperties: false
 };
 
 const suggestionSchema = {
@@ -55,12 +61,15 @@ let requestQueue = Promise.resolve();
 
 class PersistentAppServer {
   constructor() {
-    this.child = spawn('codex', ['app-server'], { cwd: process.cwd(), stdio: ['pipe', 'pipe', 'pipe'] });
+    const env = { ...process.env };
+    if (APP_SERVER_CODEX_HOME) env.CODEX_HOME = APP_SERVER_CODEX_HOME;
+    this.child = spawn('codex', ['app-server'], { cwd: process.cwd(), env, stdio: ['pipe', 'pipe', 'pipe'] });
     setRuntimeResource('appServer', { status: 'starting', pid: this.child.pid, startedAt: new Date().toISOString() });
     this.buffer = '';
     this.nextId = 1;
     this.pending = new Map();
     this.activeTurn = null;
+    this.loadedThreads = new Set();
     this.closed = false;
     this.child.stdout.on('data', (chunk) => this.onData(chunk));
     this.child.stderr.on('data', () => {});
@@ -112,28 +121,58 @@ class PersistentAppServer {
     }
   }
 
-  async runTurn(prompt, outputSchema, runId) {
+  async ensureThread(existingThreadId, model, runId) {
     await this.ready;
-    const threadStage = startStage(runId, 'thread_start');
-    let started;
+    if (existingThreadId && this.loadedThreads.has(existingThreadId)) return { threadId: existingThreadId, reused: true };
+    const stage = startStage(runId, existingThreadId ? 'thread_resume' : 'thread_start');
     try {
-      started = await this.request('thread/start', { model: CODEX_MODEL, cwd: process.cwd(), approvalPolicy: 'never', sandbox: 'read-only', serviceName: 'sceneweaver' });
-      endStage(runId, threadStage, { model: CODEX_MODEL });
-    } catch (error) { failStage(runId, threadStage, error); throw error; }
-    const threadId = started?.thread?.id;
+      if (existingThreadId) {
+        await this.request('thread/resume', { threadId: existingThreadId });
+        this.loadedThreads.add(existingThreadId);
+        endStage(runId, stage, { threadId: existingThreadId, model });
+        return { threadId: existingThreadId, reused: true };
+      }
+      const started = await this.request('thread/start', { model, cwd: process.cwd(), approvalPolicy: 'never', sandbox: 'read-only', serviceName: 'sceneweaver' });
+      const threadId = started?.thread?.id;
+      if (!threadId) throw new Error('Codex app-server did not return a thread id.');
+      this.loadedThreads.add(threadId);
+      endStage(runId, stage, { threadId, model });
+      return { threadId, reused: false };
+    } catch (error) {
+      failStage(runId, stage, error);
+      if (existingThreadId) return this.ensureThread(null, model, runId);
+      throw error;
+    }
+  }
+
+  async runTurn(prompt, outputSchema, runId, { threadId: existingThreadId = null, model = CODEX_MODEL, persistent = false } = {}) {
+    const ensured = await this.ensureThread(existingThreadId, model, runId);
+    const threadId = ensured.threadId;
     if (!threadId) throw new Error('Codex app-server did not return a thread id.');
     const modelStage = startStage(runId, 'model_generate', { threadId });
     const completion = new Promise((resolve, reject) => { this.activeTurn = { resolve, reject }; });
     try {
-      await this.request('turn/start', { threadId, input: [{ type: 'text', text: prompt }], outputSchema });
+      await this.request('turn/start', { threadId, model, cwd: process.cwd(), approvalPolicy: 'never', sandbox: 'read-only', input: [{ type: 'text', text: prompt }], outputSchema });
       const turn = await completion;
       endStage(runId, modelStage, { outputItems: turn?.items?.length || 0 });
-      return turn;
+      return { turn, threadId, reused: ensured.reused };
     } catch (error) {
       if (this.activeTurn) this.activeTurn = null;
       failStage(runId, modelStage, error);
       throw error;
+    } finally {
+      if (!persistent) await this.cleanupThread(threadId);
     }
+  }
+
+  async cleanupThread(threadId) {
+    if (!threadId || this.closed) return;
+    const failures = [];
+    for (const method of ['thread/unsubscribe', 'thread/delete']) {
+      if (this.closed) break;
+      try { await this.request(method, { threadId }); } catch (error) { failures.push(`${method}: ${error.message}`); }
+    }
+    if (failures.length) console.warn(`Codex thread cleanup incomplete (${threadId}): ${failures.join('; ')}`);
   }
 
   destroy(error = new Error('Codex app-server stopped.')) {
@@ -155,7 +194,7 @@ function getAppServer() {
   return { client: appServer, reused };
 }
 
-async function executeStructured({ prompt, outputSchema, validate, label, runId }) {
+async function executeStructured({ prompt, outputSchema, validate, label, runId, thread }) {
   const appServerStage = startStage(runId, 'app_server_ready');
   const { client, reused } = getAppServer();
   let timer;
@@ -163,17 +202,17 @@ async function executeStructured({ prompt, outputSchema, validate, label, runId 
     await client.ready;
     endStage(runId, appServerStage, { reused, pid: client.child.pid });
     const turn = await Promise.race([
-      client.runTurn(prompt, outputSchema, runId),
+      client.runTurn(prompt, outputSchema, runId, thread),
       new Promise((_, reject) => { timer = setTimeout(() => { const error = new Error(`Codex ${label} timed out after ${TIMEOUT_MS / 1000} seconds.`); client.destroy(error); reject(error); }, TIMEOUT_MS); })
     ]);
-    if (turn?.status !== 'completed') throw new Error(`Codex ${label} failed: ${turn?.error?.message || turn?.status || 'unknown error'}`);
+    if (turn?.turn?.status !== 'completed') throw new Error(`Codex ${label} failed: ${turn?.turn?.error?.message || turn?.turn?.status || 'unknown error'}`);
     const validationStage = startStage(runId, 'output_validate');
-    const text = turn.items?.find((item) => item.type === 'agentMessage')?.text;
+    const text = turn.turn.items?.find((item) => item.type === 'agentMessage')?.text;
     try {
       const result = JSON.parse(text);
       validate(result);
       endStage(runId, validationStage, { responseChars: text?.length || 0 });
-      return result;
+      return { ...result, threadId: turn.threadId, threadReused: turn.reused };
     } catch (error) { failStage(runId, validationStage, error); throw error; }
   } catch (error) {
     if (appServerStage) failStage(runId, appServerStage, error);
@@ -202,11 +241,11 @@ export function generateCodexTurn(context) {
   endStage(context.runId, contextStage, { promptChars: prompt.length, publicLogs: Math.min(6, context.state.logs.length), privateMemories: context.memories.length });
   return runCodexStructured({
     prompt, outputSchema: turnSchema, label: 'turn', runId: context.runId,
+    thread: { threadId: context.character.activeThreadId, model: context.character.effectiveModel || CODEX_MODEL, persistent: true },
     validate: (result) => {
-      if (typeof result.shouldRespond !== 'boolean') throw new Error('missing shouldRespond');
       if (typeof result.emotion !== 'string' || !result.emotion.trim()) throw new Error('missing emotion');
-      if (typeof result.dialogue !== 'string' || (result.shouldRespond && !result.dialogue.trim())) throw new Error('missing dialogue');
-      if (typeof result.action !== 'string' || (result.shouldRespond && context.state.presentationMode !== 'chat' && !result.action.trim())) throw new Error('missing action');
+      if (typeof result.dialogue !== 'string' || (context.state.presentationMode === 'chat' && !result.dialogue.trim())) throw new Error('missing dialogue');
+      if (typeof result.action !== 'string' || (context.state.presentationMode !== 'chat' && !result.action.trim() && !result.dialogue.trim())) throw new Error('missing response content');
       for (const field of ['dialogue', 'action', 'emotion']) result[field] = result[field].trim();
       if (typeof result.memory !== 'string') throw new Error('invalid memory');
       result.memory = result.memory.trim();
@@ -214,6 +253,12 @@ export function generateCodexTurn(context) {
       if (!Array.isArray(result.relationshipChanges)) throw new Error('invalid relationshipChanges');
       if (!['continue', 'stalled', 'complete'].includes(result.sceneSignal)) throw new Error('invalid sceneSignal');
     }
+  });
+}
+
+export function generateResponderSelection(prompt, runId) {
+  return runCodexStructured({ prompt, outputSchema: responderSchema, label: 'responder selection', runId,
+    validate: (result) => { if (!Array.isArray(result.responders)) throw new Error('invalid responders'); }
   });
 }
 

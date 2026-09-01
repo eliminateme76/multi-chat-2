@@ -19,8 +19,12 @@ cd /mnt/c/Users/user/Documents/GitHub/multi-ai-chat
 cp .env.example .env
 npm install
 npm run db:setup
+mkdir -p "$HOME/.codex-sceneweaver"
+CODEX_HOME="$HOME/.codex-sceneweaver" codex login
 npm run dev
 ```
+
+`.env`의 `SCENEWEAVER_CODEX_HOME`에는 위에서 로그인한 디렉터리의 절대 경로를 지정하세요. 앱 전용 Codex 홈은 일반 CLI의 설정·인증·세션과 분리되며, 생성이 끝난 일회성 thread는 자동으로 구독 해제 후 삭제됩니다.
 
 기본적으로 브라우저에서 `http://localhost:3000`을 여세요. WSL의 localhost 포트 전달이 비활성화된 환경에서는 Ubuntu에서 아래 명령으로 IP를 확인한 후 `http://<WSL_IP>:3000`으로 접속해야 합니다.
 
@@ -57,11 +61,13 @@ Browser UI → App API / DB → Codex app-server (stdio JSON-RPC)
 
 `POST /api/turns`는 실제 Codex app-server를 stdio JSON-RPC로 호출합니다. 현재 화자의 Character Card, 개인 기억, 관계, 활성 장면 요약과 최근 공개 그룹 로그를 조립합니다. 구조화된 응답은 검증 후 공개 메시지, 감정, 개인 기억, 관계 변화와 장면 신호로 한 트랜잭션에 저장됩니다. 자세한 설계는 [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)를 참고하세요.
 
-앱 서버를 실행하는 WSL Ubuntu에 Codex CLI가 설치·로그인되어 있어야 합니다.
+앱 서버를 실행하는 WSL Ubuntu에 Codex CLI가 설치되어 있어야 하며, 앱 전용 `SCENEWEAVER_CODEX_HOME`에 로그인되어 있어야 합니다.
 
 ```bash
 npm install -g @openai/codex@latest
-codex login
+mkdir -p "$HOME/.codex-sceneweaver"
+CODEX_HOME="$HOME/.codex-sceneweaver" codex login
+CODEX_HOME="$HOME/.codex-sceneweaver" codex login status
 codex --version
 ```
 

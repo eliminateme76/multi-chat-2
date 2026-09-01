@@ -5,8 +5,9 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { generateCharacterSuggestion, generateCodexTurn, generateEventSuggestions } from './codex-client.js';
-import { buildTurnContext, createSceneFromEvent, getStoryState, persistGeneratedTurn } from './story-engine.js';
+import { appendSceneEvent, buildTurnContext, createSceneFromEvent, getActiveParticipants, getStoryState, persistGeneratedTurn } from './story-engine.js';
 import { endStage, failRun, failStage, finishRun, snapshot, startRun, startStage, subscribe } from './runtime-telemetry.js';
+import { enqueueProgression, getOperation, resumeQueuedOperations } from './progression-runner.js';
 
 if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required. Copy .env.example to .env.');
 const { Pool } = pg;
@@ -24,6 +25,7 @@ const required = (value, name) => {
   if (typeof value !== 'string' || !value.trim()) throw new Error(`${name} is required.`);
   return value.trim();
 };
+const optionalText = (value, fallback = '') => typeof value === 'string' ? value.trim() : fallback;
 const projectIdFrom = (req) => {
   const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : DEFAULT_PROJECT_ID;
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(projectId)) throw new Error('Invalid projectId.');
@@ -54,6 +56,18 @@ app.get('/api/state', async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+app.get('/api/operations/:id', async (req, res, next) => {
+  try {
+    const operation = await getOperation(pool, projectIdFrom(req), req.params.id);
+    if (!operation) return res.status(404).json({ error: 'Operation not found.' });
+    res.json(operation);
+  } catch (error) { next(error); }
+});
+
+app.get('/api/participants', async (req, res, next) => {
+  try { res.json({ participants: await getActiveParticipants(pool, projectIdFrom(req)) }); } catch (error) { next(error); }
+});
+
 app.put('/api/world', async (req, res, next) => {
   const client = await pool.connect();
   try {
@@ -71,7 +85,10 @@ app.post('/api/characters', async (req, res, next) => {
   try {
     const projectId = projectIdFrom(req); const character = req.body;
     const sort = (await pool.query('SELECT COALESCE(MAX(sort_order), -1)+1 AS next FROM characters WHERE project_id=$1', [projectId])).rows[0].next;
-    await pool.query('INSERT INTO characters (id,project_id,name,role,gender,personality,speech_style,goal,secret,emoji,color,emotion,sort_order) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)', [randomUUID(), projectId, required(character.name, 'name'), required(character.role, 'role'), required(character.gender, 'gender'), required(character.personality, 'personality'), required(character.speechStyle, 'speechStyle'), required(character.goal, 'goal'), required(character.secret, 'secret'), '✧', '#5c9c9b', '기대', sort]);
+    const id = randomUUID();
+    await pool.query('INSERT INTO characters (id,project_id,name,role,gender,personality,speech_style,goal,secret,emoji,color,emotion,sort_order) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)', [id, projectId, required(character.name, 'name'), optionalText(character.role, '미정'), optionalText(character.gender, '미설정'), optionalText(character.personality), optionalText(character.speechStyle), optionalText(character.goal), optionalText(character.secret), '✧', '#5c9c9b', '기대', sort]);
+    await pool.query(`INSERT INTO scene_participants(scene_id,character_id,joined_sequence)
+      SELECT id,$2,$3 FROM scenes WHERE project_id=$1 AND status='active' ON CONFLICT DO NOTHING`, [projectId, id, Number((await pool.query('SELECT next_event_sequence FROM projects WHERE id=$1', [projectId])).rows[0].next_event_sequence)]);
     res.json(await getStoryState(pool, projectId));
   } catch (error) { next(error); }
 });
@@ -116,13 +133,33 @@ app.post('/api/events', async (req, res, next) => {
   const client = await pool.connect();
   try {
     const projectId = projectIdFrom(req); const text = required(req.body.text, 'text');
-    const nextTime = typeof req.body.time === 'string' ? req.body.time.trim().slice(0, 80) : '';
     const eventType = EVENT_TYPES.has(req.body.eventType) ? req.body.eventType : '일반';
     await client.query('BEGIN');
-    await createSceneFromEvent(client, projectId, text, nextTime, eventType);
+    await appendSceneEvent(client, projectId, { text, eventType, actorType: 'DIRECTOR' });
     await client.query('COMMIT');
     res.json(await getStoryState(client, projectId));
   } catch (error) { await client.query('ROLLBACK'); next(error); } finally { client.release(); }
+});
+
+app.post('/api/messages', async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    const projectId = projectIdFrom(req); const text = required(req.body.text, 'text');
+    await client.query('BEGIN');
+    await appendSceneEvent(client, projectId, { text, eventType: '메시지', actorType: 'USER', recipientIds: Array.isArray(req.body.recipientIds) ? req.body.recipientIds : null });
+    await client.query('COMMIT');
+    res.json(await getStoryState(client, projectId));
+  } catch (error) { await client.query('ROLLBACK'); next(error); } finally { client.release(); }
+});
+
+app.post('/api/progressions', async (req, res, next) => {
+  try {
+    const projectId = projectIdFrom(req);
+    const mode = req.body.mode === 'MANUAL' ? 'MANUAL' : 'AUTO';
+    const responderIds = Array.isArray(req.body.responderIds) ? req.body.responderIds : [];
+    const operationId = await enqueueProgression(pool, projectId, { mode, responderIds });
+    res.status(202).json({ operationId, status: 'QUEUED' });
+  } catch (error) { next(error); }
 });
 
 app.get('/api/turns/next-speaker', async (req, res, next) => {
@@ -135,6 +172,11 @@ app.get('/api/turns/next-speaker', async (req, res, next) => {
 });
 
 app.post('/api/turns', async (req, res, next) => {
+  try {
+    const operationId = await enqueueProgression(pool, projectIdFrom(req), { mode: 'AUTO' });
+    return res.status(202).json({ operationId, status: 'QUEUED' });
+  } catch (error) { return next(error); }
+  /* legacy synchronous path retained below for reference; unreachable */
   let client; let lockHeld = false; let transactionStarted = false; let projectId; let runId; let activeStage;
   try {
     projectId = projectIdFrom(req);
@@ -168,4 +210,4 @@ app.post('/api/turns', async (req, res, next) => {
 });
 
 app.use((error, _req, res, _next) => { console.error(error); res.status(400).json({ error: error.message || 'Request failed.' }); });
-app.listen(port, host, () => console.log(`Sceneweaver running at http://${host}:${port}`));
+app.listen(port, host, () => { console.log(`Sceneweaver running at http://${host}:${port}`); void resumeQueuedOperations(pool); });
