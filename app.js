@@ -4,6 +4,7 @@ let autoTimer = null;
 let autoEnabled = false;
 let turnInFlight = false;
 let pendingEventTurn = false;
+let directorTab = 'state';
 let typingCharacter = null;
 let consecutiveSilentTurns = 0;
 let eventSuggestions = [];
@@ -27,6 +28,12 @@ async function api(url, options = {}) {
   return body;
 }
 function setState(nextState) { state = nextState; currentProjectId = nextState.projectId; $('#project-select').value = currentProjectId; $('#save-status').textContent = 'PostgreSQL 저장됨'; render(); }
+function setDirectorTab(tab) {
+  directorTab = tab;
+  document.querySelectorAll('[data-director-tab]').forEach((button) => { const active = button.dataset.directorTab === tab; button.classList.toggle('is-active', active); button.setAttribute('aria-selected', String(active)); });
+  document.querySelectorAll('[data-director-panel]').forEach((panel) => { panel.hidden = panel.dataset.directorPanel !== tab; });
+}
+function setToolsOpen(open) { document.body.classList.toggle('tools-open', open); }
 function renderTurnControls() {
   const advanceButton = $('#advance-button');
   advanceButton.disabled = turnInFlight || !state;
@@ -43,12 +50,12 @@ function renderTurnControls() {
   $('#auto-event-state').textContent = autoEventInFlight ? '생성 중' : autoEventEnabled ? `${turnsSinceAutoEvent}/${AUTO_EVENT_TURN_INTERVAL}` : 'OFF';
 }
 function render() {
-  $('#world-title').textContent = state.world.title; $('#scene-number').textContent = String(state.sceneNumber).padStart(2, '0'); $('#scene-location').textContent = state.world.location; $('#scene-description').textContent = state.world.description; $('#scene-mood').textContent = state.world.mood; $('#director-note').textContent = state.directorNote; renderTurnControls();
+  $('#world-title').textContent = state.world.title; $('#scene-number').textContent = String(state.sceneNumber).padStart(2, '0'); $('#scene-location-compact').textContent = state.world.location; $('#scene-location').textContent = state.world.location; $('#scene-description').textContent = state.world.description; $('#scene-time').textContent = state.world.time; $('#scene-mood').textContent = state.world.mood; $('#scene-mood-compact').textContent = state.world.mood; $('#director-note').textContent = state.directorNote; renderTurnControls(); setDirectorTab(directorTab);
   $('#character-list').innerHTML = state.characters.map((character, index) => `<button class="character ${(typingCharacter?.id === character.id || (!typingCharacter && index === state.turn % state.characters.length)) ? 'selected' : ''}" data-edit="${character.id}">${avatar(character)}<span><strong>${esc(character.name)}</strong><small>${esc(character.gender)} · ${esc(character.role)}</small><small>${typingCharacter?.id === character.id ? '입력 중…' : esc(character.emotion)}</small></span></button>`).join('');
   document.querySelectorAll('[data-edit]').forEach((button) => { button.onclick = () => openCharacterModal(button.dataset.edit); });
   $('#conversation-log').classList.toggle('chat-mode', state.presentationMode === 'chat');
   const typingMessage = state.presentationMode === 'chat' && typingCharacter ? `<article class="message typing-message">${avatar(typingCharacter)}<div><div class="message-meta"><span class="message-name">${esc(typingCharacter.name)}</span></div><p class="typing-indicator"><i></i><i></i><i></i><span>입력 중</span></p></div></article>` : '';
-  $('#conversation-log').innerHTML = state.logs.map((log) => { if (log.type === 'event') return `<div class="message event"><strong>DIRECTOR EVENT · ${esc(log.eventType || '일반')}</strong>${esc(log.text)}</div>`; const c = characterById(log.characterId); return `<article class="message">${avatar(c)}<div><div class="message-meta"><span class="message-name">${esc(c.name)}</span><span class="message-role">${esc(c.gender)} · ${esc(c.role)}</span></div><p class="message-text">${esc(log.text)}</p>${log.action ? `<p class="message-action">${esc(log.action)}</p>` : ''}</div></article>`; }).join('') + typingMessage;
+  $('#conversation-log').innerHTML = state.logs.map((log, index) => { const latest = index === state.logs.length - 1 ? ' latest-message' : ''; if (log.type === 'event') return `<div class="message event${latest}"><strong>DIRECTOR EVENT · ${esc(log.eventType || '일반')}</strong>${esc(log.text)}</div>`; const c = characterById(log.characterId); return `<article class="message${latest}">${avatar(c)}<div><div class="message-meta"><span class="message-name">${esc(c.name)}</span><span class="message-role">${esc(c.gender)} · ${esc(c.role)}</span></div><p class="message-text">${esc(log.text)}</p>${log.action ? `<p class="message-action">${esc(log.action)}</p>` : ''}</div></article>`; }).join('') + typingMessage;
   const log = $('#conversation-log'); log.scrollTop = log.scrollHeight;
   $('#state-list').innerHTML = `<div><dt>TIME</dt><dd>${esc(state.world.time)}</dd></div><div><dt>SCENE STATUS</dt><dd>${esc(state.sceneSignal || 'continue')}</dd></div><div><dt>CURRENT SITUATION</dt><dd>${esc(state.world.description)}</dd></div><div><dt>WORLD RULES</dt><dd>${esc(state.world.rules || '설정된 규칙 없음')}</dd></div>`;
   $('#relationship-list').innerHTML = state.relationships.map((r) => `<div class="relationship"><div class="relationship-top"><strong>${esc(characterById(r.from)?.name)} ↔ ${esc(characterById(r.to)?.name)}</strong><span>${r.score}</span></div><span>${esc(r.label)}</span><div class="meter"><i style="width:${r.score}%"></i></div></div>`).join(''); renderSuggestions();
@@ -125,7 +132,7 @@ async function advanceTurn() {
     }
   }
 }
-async function addEvent(text, time = '', { automatic = false, eventType = '일반' } = {}) { if (!text.trim()) return false; try { setState(await api('/api/events', { method: 'POST', body: JSON.stringify({ text, time, eventType }) })); turnsSinceAutoEvent = 0; if (turnInFlight) pendingEventTurn = true; else await advanceTurn(); return true; } catch (error) { if (automatic) throw error; alert(error.message); return false; } }
+async function addEvent(text, time = '', { automatic = false, eventType = '일반' } = {}) { if (!text.trim()) return false; try { setState(await api('/api/events', { method: 'POST', body: JSON.stringify({ text, time, eventType }) })); setToolsOpen(false); turnsSinceAutoEvent = 0; if (turnInFlight) pendingEventTurn = true; else await advanceTurn(); return true; } catch (error) { if (automatic) throw error; alert(error.message); return false; } }
 async function maybeInjectAutomaticEvent() {
   if (!autoEventEnabled || autoEventInFlight || turnsSinceAutoEvent < AUTO_EVENT_TURN_INTERVAL) return;
   autoEventInFlight = true; $('#save-status').textContent = '자동 사건 생성 중…'; renderTurnControls();
@@ -152,6 +159,10 @@ $('#advance-button').onclick = advanceTurn;
 $('#auto-button').onclick = () => { if (autoEnabled) stopAutoProgress(); else { autoEnabled = true; scheduleAutoTurn(0); } renderTurnControls(); };
 $('#auto-event-button').onclick = () => { autoEventEnabled = !autoEventEnabled; if (!autoEventEnabled) turnsSinceAutoEvent = 0; renderTurnControls(); };
 $('#open-character-modal').onclick = () => openCharacterModal(); $('#open-world-modal').onclick = openWorldModal;
+$('#open-world-modal-from-scene').onclick = openWorldModal;
+$('#open-tools-button').onclick = () => setToolsOpen(true);
+$('#tools-scrim').onclick = () => setToolsOpen(false);
+document.querySelectorAll('[data-director-tab]').forEach((button) => { button.onclick = () => setDirectorTab(button.dataset.directorTab); });
 $('#event-form').onsubmit = (event) => { event.preventDefault(); addEvent($('#event-input').value, '', { eventType: $('#event-type-select').value }); $('#event-input').value = ''; };
 $('#suggest-button').onclick = async () => {
   const button = $('#suggest-button');

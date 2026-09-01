@@ -30,36 +30,51 @@
 
         <section class="conversation-panel">
           <div class="scene-banner">
-            <div><span class="eyebrow">SCENE · <span id="scene-number">01</span></span><h2 id="scene-location">중앙 도서관, 금서 보관실 앞</h2><p id="scene-description">늦은 밤. 폭풍우가 창을 두드리고, 오래된 마법서가 희미하게 빛난다.</p></div>
-            <div class="scene-mood"><span>분위기</span><strong id="scene-mood">긴장 · 미스터리</strong></div>
+            <div class="scene-compact"><span class="eyebrow">SCENE · <span id="scene-number">01</span></span><strong id="scene-location-compact">중앙 도서관, 금서 보관실 앞</strong></div>
+            <div class="scene-mood"><span>분위기</span><strong id="scene-mood-compact">긴장 · 미스터리</strong></div>
           </div>
           <div id="conversation-log" class="conversation-log" aria-live="polite"></div>
-          <div class="conversation-controls">
+          <div class="conversation-controls floating-controls">
             <button id="advance-button" class="primary-button"><span>✦</span> 다음 턴 진행</button>
             <button id="auto-button" class="secondary-button">자동 진행 <span id="auto-state">OFF</span></button>
             <button id="auto-event-button" class="secondary-button" title="6턴마다 AI 사건을 자동 투입합니다">자동 사건 <span id="auto-event-state">OFF</span></button>
+            <button id="open-tools-button" class="secondary-button tools-button" type="button">도구</button>
           </div>
         </section>
 
         <aside class="right-panel panel">
           <div class="panel-heading"><div><span class="eyebrow">DIRECTOR</span><h2>장면 상태</h2></div><span class="live-dot">LIVE</span></div>
-          <dl id="state-list" class="state-list"></dl>
-          <div class="director-note"><span>DIRECTOR NOTE</span><p id="director-note">세라의 비밀을 둘러싼 긴장을 유지하세요. 루카에게는 아직 확실한 증거가 없습니다.</p></div>
-          <div class="relationship-section"><span class="eyebrow">RELATIONSHIPS</span><div id="relationship-list"></div></div>
+          <div class="director-tabs" role="tablist" aria-label="Director 도구">
+            <button class="director-tab is-active" data-director-tab="state" role="tab" aria-selected="true">상태</button>
+            <button class="director-tab" data-director-tab="scene" role="tab" aria-selected="false">장면</button>
+            <button class="director-tab" data-director-tab="events" role="tab" aria-selected="false">사건</button>
+          </div>
+          <div class="director-tab-panel" data-director-panel="state">
+            <dl id="state-list" class="state-list"></dl>
+            <div class="director-note"><span>DIRECTOR NOTE</span><p id="director-note">세라의 비밀을 둘러싼 긴장을 유지하세요. 루카에게는 아직 확실한 증거가 없습니다.</p></div>
+            <div class="relationship-section"><span class="eyebrow">RELATIONSHIPS</span><div id="relationship-list"></div></div>
+          </div>
+          <div class="director-tab-panel" data-director-panel="scene" hidden>
+            <span class="eyebrow">CURRENT SCENE</span>
+            <h3 id="scene-location">중앙 도서관, 금서 보관실 앞</h3>
+            <dl class="scene-detail-list"><div><dt>TIME</dt><dd id="scene-time">늦은 밤</dd></div><div><dt>MOOD</dt><dd id="scene-mood">긴장 · 미스터리</dd></div></dl>
+            <p id="scene-description" class="scene-description">늦은 밤. 폭풍우가 창을 두드리고, 오래된 마법서가 희미하게 빛난다.</p>
+            <button id="open-world-modal-from-scene" class="secondary-button" type="button">장면·세계관 편집</button>
+          </div>
+          <div class="director-tab-panel event-tools" data-director-panel="events" hidden>
+            <div class="intervention-heading"><div><span class="eyebrow">DIRECTOR INTERVENTION</span><h3>사건을 투입하세요</h3></div><button id="suggest-button" class="text-button">✦ AI 전개 추천</button></div>
+            <div id="suggestion-list" class="suggestion-list"></div>
+            <div class="event-direction"><span>자동 사건 방향</span><div id="event-type-filters" class="event-type-filters"></div></div>
+            <form id="event-form" class="event-form">
+              <label class="sr-only" for="event-type-select">사건 타입</label><select id="event-type-select"><option>일상</option><option>관계</option><option>연락</option><option>선택</option><option>발견</option><option>돌발</option><option>시간 전환</option><option>분위기</option><option>일반</option></select>
+              <label class="sr-only" for="event-input">새로운 사건</label><input id="event-input" maxlength="180" placeholder="예: 정체불명의 편지가 창문을 깨고 날아든다." />
+              <button class="event-submit" type="submit">사건 투입 <span>→</span></button>
+            </form>
+          </div>
         </aside>
       </section>
-
-      <section class="intervention panel">
-        <div class="intervention-heading"><div><span class="eyebrow">DIRECTOR INTERVENTION</span><h2>이야기에 변화를 주세요</h2></div><button id="suggest-button" class="text-button">✦ AI 전개 추천</button></div>
-        <div id="suggestion-list" class="suggestion-list"></div>
-        <div class="event-direction"><span>자동 사건 방향</span><div id="event-type-filters" class="event-type-filters"></div></div>
-        <form id="event-form" class="event-form">
-          <label class="sr-only" for="event-type-select">사건 타입</label><select id="event-type-select"><option>일상</option><option>관계</option><option>연락</option><option>선택</option><option>발견</option><option>돌발</option><option>시간 전환</option><option>분위기</option><option>일반</option></select>
-          <label class="sr-only" for="event-input">새로운 사건</label><input id="event-input" maxlength="180" placeholder="예: 정체불명의 편지가 창문을 깨고 날아든다." />
-          <button class="event-submit" type="submit">사건 투입 <span>→</span></button>
-        </form>
-      </section>
     </main>
+    <button id="tools-scrim" class="tools-scrim" type="button" aria-label="도구 닫기"></button>
 
     <dialog id="character-modal" class="modal"><form id="character-form" method="dialog" class="modal-card"><div class="modal-header"><div><span class="eyebrow">CHARACTER AGENT</span><h2 id="character-modal-title">새 캐릭터 만들기</h2></div><button type="button" class="close-button" data-close="character-modal">×</button></div><div class="form-grid"><label>이름<input name="name" required maxlength="20" /></label><label>성별<select name="gender" required><option value="여성">여성</option><option value="남성">남성</option><option value="논바이너리">논바이너리</option><option value="성별 없음">성별 없음</option></select></label><label class="full">역할<input name="role" required maxlength="40" placeholder="예: 마법 기사 견습생" /></label><label class="full">성격<input name="personality" required maxlength="120" placeholder="쉼표로 구분해 입력" /></label><label class="full">말투<input name="speechStyle" required maxlength="120" /></label><label>목표<input name="goal" required maxlength="120" /></label><label>비밀<input name="secret" required maxlength="120" /></label></div><div class="modal-footer"><button type="button" id="ai-character-button" class="secondary-button">✦ 현재 장면 기반 추천</button><button class="primary-button" value="default">저장하기</button></div></form></dialog>
 
