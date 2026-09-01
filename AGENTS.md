@@ -63,6 +63,7 @@ Browser (index.html + app.js)
 - `story-engine.js` selects the speaker and loads the active scene plus that character's private memories.
 - `context-builder.js` builds a bounded prompt from the active character card, related relationships, private memories, scene summary, and only recent **public** logs.
 - The model returns structured dialogue/action/emotion plus optional memory, relationship changes, and a scene progress signal.
+- Model and reasoning effort are resolved from character override → role default → server fallback and are sent on every `turn/start`; do not make thread history authoritative for runtime configuration.
 - Only after validation does one PostgreSQL transaction persist the public entry and allowed state changes.
 - Do not expose Codex auth details or app-server directly to the browser.
 - Do not silently replace Codex failures with hard-coded dialogue. Return an API error instead.
@@ -111,3 +112,4 @@ pg_isready
 - Do not commit `.env`, `node_modules`, Codex credentials, or PostgreSQL data files.
 - Keep data mutations transactional.
 - Prefer structured model output schemas over parsing prose.
+- Populate model/effort choices from Codex app-server `model/list`; do not hard-code a model's supported reasoning levels in the UI.

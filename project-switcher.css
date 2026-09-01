@@ -23,6 +23,7 @@
 }
 
 .playthrough-actions{margin-top:20px;padding:14px;border:1px solid #e7e2f1;border-radius:9px;background:#faf9fd}.playthrough-actions p{margin:6px 0 12px;color:#6d697d;font-size:12px}.playthrough-actions>div{display:flex;gap:8px}.danger-button{border:1px solid #e3a7b6;background:#fff5f7;color:#ad3656;padding:10px 13px;border-radius:7px;cursor:pointer;font:12px "Gowun Dodum",sans-serif}
+.ai-runtime-settings{margin-top:20px;padding:14px;border:1px solid #dcd5f2;border-radius:9px;background:#f8f6ff}.ai-settings-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:10px 0}.ai-settings-grid label{color:#5d5a6e;font-size:11px}.ai-settings-grid select,.form-grid select{display:block;width:100%;margin-top:5px;border:1px solid #dedbe8;border-radius:6px;padding:9px;background:#fff;color:var(--ink);font:12px "Gowun Dodum",sans-serif}.ai-form-heading{padding-top:7px;border-top:1px solid #eeeaf4}
 
 .conversation-log.chat-mode .message:not(.event) {
   margin-bottom: 14px;

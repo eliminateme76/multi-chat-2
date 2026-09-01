@@ -63,7 +63,7 @@ function renderActiveThread() {
       banner.dataset.active = 'true';
       title.textContent = run.metadata.activeAgentType === 'director' ? '월드 디렉터' : `캐릭터 · ${run.metadata.activeAgentName}`;
       title.className = 'status-running';
-      detail.textContent = `${run.metadata.activePhase || '분석 중'} · ${runningStage ? `${labelFor(runningStage.name)} ${ms(Date.now() - Date.parse(runningStage.startedAt))}` : '호출 준비 중'}${run.metadata.activeThreadId ? ` · ${run.metadata.activeThreadId}` : ''}`;
+      detail.textContent = `${run.metadata.activePhase || '분석 중'} · ${runningStage ? `${labelFor(runningStage.name)} ${ms(Date.now() - Date.parse(runningStage.startedAt))}` : '호출 준비 중'}${run.metadata.activeModel ? ` · ${run.metadata.activeModel}${run.metadata.activeEffort ? ` · ${run.metadata.activeEffort}` : ''}` : ''}${run.metadata.activeThreadId ? ` · ${run.metadata.activeThreadId}` : ''}`;
       return;
     }
     banner.dataset.active = 'false';
@@ -78,7 +78,7 @@ function renderActiveThread() {
   banner.dataset.active = 'true';
   title.textContent = active.kind === 'director' ? '월드 디렉터' : `캐릭터 · ${active.name.replace(/^캐릭터 응답 · /, '')}`;
   title.className = 'status-running';
-  detail.textContent = `${stage ? `${labelFor(stage.name)} · ${stageDuration} 진행 중` : 'Codex 호출 진행 중'} · ${active.detail || active.model || '기본 모델'} · ${compactId}`;
+  detail.textContent = `${stage ? `${labelFor(stage.name)} · ${stageDuration} 진행 중` : 'Codex 호출 진행 중'} · ${active.detail || active.model || '기본 모델'}${active.effort ? ` · ${active.effort}` : ''} · ${compactId}`;
 }
 
 function renderPipeline(run) {
@@ -123,7 +123,8 @@ function renderThreads() {
     const status = thread.conversationIdle ? '대화 종료' : ({ running: '실행 중', idle: '대기', completed: '일회성 완료', failed: '실패' })[thread.status] || '대기';
     const statusClass = thread.status === 'idle' ? 'completed' : thread.status;
     const owner = thread.kind === 'director' ? '월드 디렉터' : thread.kind === 'character' ? `캐릭터 · ${thread.name}` : thread.name;
-    const detail = thread.kind === 'character' ? `캐릭터 스레드 · ${thread.detail || thread.model || '기본 모델'}${thread.conversationIdle && thread.idleReason ? ` · ${thread.idleReason}` : ''}` : thread.detail || thread.model || '기본 모델';
+    const runtime = `${thread.detail || thread.model || '기본 모델'}${thread.effort ? ` · ${thread.effort}` : ''}`;
+    const detail = thread.kind === 'character' ? `캐릭터 스레드 · ${runtime}${thread.conversationIdle && thread.idleReason ? ` · ${thread.idleReason}` : ''}` : runtime;
     return `<div class="thread-item ${thread.status}"><div><strong>${esc(owner)}</strong><span class="status-${statusClass}">${status}</span></div><code title="${esc(thread.threadId)}">${esc(compactId)}</code><small>${esc(detail)}</small></div>`;
   };
   const persistent = threads.length ? `<div class="thread-section">영속 스레드 · 캐릭터 / 월드 디렉터</div>${allThreads.filter((thread) => threads.some((persistentThread) => persistentThread.threadId === thread.threadId)).map(renderItem).join('')}` : '';

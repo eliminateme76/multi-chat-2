@@ -36,6 +36,27 @@ PostgreSQL owns all durable state:
 
 Codex owns no authoritative state. A WorldCharacter stores one active thread id in PostgreSQL. It starts on that character's first response, resumes after app-server reconnects, and is rebuilt from PostgreSQL if unavailable. Suggestion calls remain one-shot and are deleted after completion.
 
+## Model and reasoning configuration
+
+Runtime configuration is durable PostgreSQL state and is resolved before every call:
+
+```text
+Character model/effort override
+  -> project character defaults
+  -> server fallback
+
+Director settings
+  -> project director model/effort
+  -> project character model fallback
+
+Utility settings
+  -> character suggestion and other one-shot helpers
+```
+
+The browser loads the live picker catalog through app-server `model/list`, including each model's supported reasoning efforts. The server validates project-level pairs against that catalog. `turn/start` always receives the effective `model` and `effort`, so a setting change applies on the next turn even when an existing persistent thread is resumed.
+
+Runtime monitoring records and displays the effective pair. Playthrough cloning copies all runtime settings and character overrides; reset preserves them.
+
 ## World templates and playthroughs
 
 Each project is one independent playthrough. `projects.initial_world`, each character's `initial_profile`, and each relationship's initial label/score form its restart template.
@@ -136,4 +157,4 @@ Measured stages include state loading, speaker selection, memory retrieval, cont
 - participant entry/exit and scene-specific visibility;
 - LLM Director invoked only on transition conditions;
 - explicit lorebook entries activated by keywords;
-- thread reuse as an optional cache, never as durable memory.
+- richer per-task utility profiles if character recommendation and other one-shot work need separate tuning.

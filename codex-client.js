@@ -131,7 +131,7 @@ class PersistentAppServer {
     }
   }
 
-  async ensureThread(existingThreadId, model, runId, usage) {
+  async ensureThread(existingThreadId, model, effort, runId, usage) {
     await this.ready;
     if (existingThreadId && this.loadedThreads.has(existingThreadId)) return { threadId: existingThreadId, reused: true };
     const stage = startStage(runId, existingThreadId ? 'thread_resume' : 'thread_start', { usage });
@@ -139,30 +139,30 @@ class PersistentAppServer {
       if (existingThreadId) {
         await this.request('thread/resume', { threadId: existingThreadId });
         this.loadedThreads.add(existingThreadId);
-        endStage(runId, stage, { threadId: existingThreadId, model, usage });
+        endStage(runId, stage, { threadId: existingThreadId, model, effort, usage });
         return { threadId: existingThreadId, reused: true };
       }
       const started = await this.request('thread/start', { model, cwd: process.cwd(), approvalPolicy: 'never', sandbox: 'read-only', serviceName: 'sceneweaver' });
       const threadId = started?.thread?.id;
       if (!threadId) throw new Error('Codex app-server did not return a thread id.');
       this.loadedThreads.add(threadId);
-      endStage(runId, stage, { threadId, model, usage });
+      endStage(runId, stage, { threadId, model, effort, usage });
       return { threadId, reused: false };
     } catch (error) {
       failStage(runId, stage, error);
-      if (existingThreadId) return this.ensureThread(null, model, runId, usage);
+      if (existingThreadId) return this.ensureThread(null, model, effort, runId, usage);
       throw error;
     }
   }
 
-  async runTurn(prompt, outputSchema, runId, { threadId: existingThreadId = null, model = CODEX_MODEL, persistent = false, usage = 'Codex 호출' } = {}) {
-    const ensured = await this.ensureThread(existingThreadId, model, runId, usage);
+  async runTurn(prompt, outputSchema, runId, { threadId: existingThreadId = null, model = CODEX_MODEL, effort = 'medium', persistent = false, usage = 'Codex 호출' } = {}) {
+    const ensured = await this.ensureThread(existingThreadId, model, effort, runId, usage);
     const threadId = ensured.threadId;
     if (!threadId) throw new Error('Codex app-server did not return a thread id.');
-    const modelStage = startStage(runId, 'model_generate', { threadId, usage });
+    const modelStage = startStage(runId, 'model_generate', { threadId, model, effort, usage });
     const completion = new Promise((resolve, reject) => { this.activeTurn = { resolve, reject }; });
     try {
-      await this.request('turn/start', { threadId, model, cwd: process.cwd(), approvalPolicy: 'never', sandbox: 'read-only', input: [{ type: 'text', text: prompt }], outputSchema });
+      await this.request('turn/start', { threadId, model, effort, cwd: process.cwd(), approvalPolicy: 'never', sandbox: 'read-only', input: [{ type: 'text', text: prompt }], outputSchema });
       const turn = await completion;
       endStage(runId, modelStage, { outputItems: turn?.items?.length || 0, usage });
       return { turn, threadId, reused: ensured.reused };
@@ -202,6 +202,19 @@ function getAppServer() {
   const reused = Boolean(appServer && !appServer.closed);
   if (!reused) appServer = new PersistentAppServer();
   return { client: appServer, reused };
+}
+
+export async function listCodexModels() {
+  const { client } = getAppServer();
+  await client.ready;
+  const result = await client.request('model/list', { limit: 100, includeHidden: false });
+  return (result?.data || []).map((item) => ({
+    id: item.model || item.id,
+    name: item.displayName || item.model || item.id,
+    description: item.description || '',
+    defaultEffort: item.defaultReasoningEffort,
+    efforts: (item.supportedReasoningEfforts || []).map((option) => option.reasoningEffort)
+  }));
 }
 
 async function executeStructured({ prompt, outputSchema, validate, label, runId, thread }) {
@@ -246,13 +259,13 @@ function runCodexStructured(options) {
 process.once('exit', () => appServer?.destroy());
 
 export function generateCodexTurn(context) {
-  updateRunMetadata(context.runId, { activeAgentType: 'character', activeAgentName: context.character.name, activePhase: '캐릭터 응답 생성', activeCharacterId: context.character.id, activeCharacterName: context.character.name, activeThreadId: context.character.activeThreadId || null });
+  updateRunMetadata(context.runId, { activeAgentType: 'character', activeAgentName: context.character.name, activePhase: '캐릭터 응답 생성', activeCharacterId: context.character.id, activeCharacterName: context.character.name, activeThreadId: context.character.activeThreadId || null, activeModel: context.character.effectiveModel || CODEX_MODEL, activeEffort: context.character.effectiveReasoningEffort || 'medium' });
   const contextStage = startStage(context.runId, 'context_build');
   const prompt = buildCharacterTurnPrompt(context);
   endStage(context.runId, contextStage, { promptChars: prompt.length, publicLogs: Math.min(6, context.state.logs.length), privateMemories: context.memories.length });
   return runCodexStructured({
     prompt, outputSchema: turnSchema, label: `캐릭터 응답 · ${context.character.name}`, runId: context.runId,
-    thread: { threadId: context.character.activeThreadId, model: context.character.effectiveModel || CODEX_MODEL, persistent: true },
+    thread: { threadId: context.character.activeThreadId, model: context.character.effectiveModel || CODEX_MODEL, effort: context.character.effectiveReasoningEffort || 'medium', persistent: true },
     validate: (result) => {
       if (typeof result.shouldRespond !== 'boolean' || typeof result.silenceReason !== 'string') throw new Error('invalid response decision');
       if (typeof result.emotion !== 'string' || !result.emotion.trim()) throw new Error('missing emotion');
@@ -280,9 +293,9 @@ export function generateResponderSelection(prompt, runId) {
 }
 
 export function generateDirectorResponderSelection(prompt, runId, director) {
-  updateRunMetadata(runId, { activeAgentType: 'director', activeAgentName: '월드 디렉터', activePhase: '응답자 선택', activeThreadId: director.activeThreadId || null });
+  updateRunMetadata(runId, { activeAgentType: 'director', activeAgentName: '월드 디렉터', activePhase: '응답자 선택', activeThreadId: director.activeThreadId || null, activeModel: director.model || CODEX_MODEL, activeEffort: director.reasoningEffort || 'high' });
   return runCodexStructured({ prompt, outputSchema: responderSchema, label: 'World Director · 응답자 선택', runId,
-    thread: { threadId: director.activeThreadId, model: director.model || CODEX_MODEL, persistent: true },
+    thread: { threadId: director.activeThreadId, model: director.model || CODEX_MODEL, effort: director.reasoningEffort || 'high', persistent: true },
     validate: (result) => { if (!Array.isArray(result.responders)) throw new Error('invalid responders'); }
   });
 }
@@ -293,6 +306,7 @@ export function generateCharacterSuggestion(state, runId) {
   endStage(runId, contextStage, { promptChars: prompt.length, publicLogs: Math.min(6, state.logs.length), characters: state.characters.length });
   return runCodexStructured({
     prompt, outputSchema: suggestionSchema, label: '캐릭터 추천', runId,
+    thread: { model: state.aiSettings?.utility.model || CODEX_MODEL, effort: state.aiSettings?.utility.reasoningEffort || 'medium' },
     validate: (result) => {
       for (const field of ['name', 'role', 'personality', 'speechStyle', 'goal', 'secret']) {
         if (typeof result[field] !== 'string' || !result[field].trim()) throw new Error(`missing ${field}`);
@@ -322,13 +336,13 @@ export function generateEventSuggestions(state, runId, desiredTypes = []) {
 }
 
 export function generateDirectorEventSuggestions(state, runId, desiredTypes, director) {
-  updateRunMetadata(runId, { activeAgentType: 'director', activeAgentName: '월드 디렉터', activePhase: '사건 제안 생성', activeThreadId: director.activeThreadId || null });
+  updateRunMetadata(runId, { activeAgentType: 'director', activeAgentName: '월드 디렉터', activePhase: '사건 제안 생성', activeThreadId: director.activeThreadId || null, activeModel: director.model || CODEX_MODEL, activeEffort: director.reasoningEffort || 'high' });
   const contextStage = startStage(runId, 'context_build');
   const prompt = buildEventSuggestionsPrompt(state, desiredTypes, { director: true });
   endStage(runId, contextStage, { promptChars: prompt.length, publicLogs: Math.min(30, state.logs.length), director: true });
   return runCodexStructured({
     prompt, outputSchema: eventSuggestionsSchema, label: 'World Director · 사건 추천', runId,
-    thread: { threadId: director.activeThreadId, model: director.model || CODEX_MODEL, persistent: true },
+    thread: { threadId: director.activeThreadId, model: director.model || CODEX_MODEL, effort: director.reasoningEffort || 'high', persistent: true },
     validate: (result) => {
       if (!Array.isArray(result.suggestions) || result.suggestions.length !== 10) throw new Error('invalid suggestions');
       for (const suggestion of result.suggestions) {
@@ -352,19 +366,19 @@ function validateDirectorEventPlan(result, { requireScene = false } = {}) {
 }
 
 export function generateDirectorEventApplication(state, event, runId, director) {
-  updateRunMetadata(runId, { activeAgentType: 'director', activeAgentName: '월드 디렉터', activePhase: '사건 적용 판단', activeThreadId: director.activeThreadId || null });
+  updateRunMetadata(runId, { activeAgentType: 'director', activeAgentName: '월드 디렉터', activePhase: '사건 적용 판단', activeThreadId: director.activeThreadId || null, activeModel: director.model || CODEX_MODEL, activeEffort: director.reasoningEffort || 'high' });
   const prompt = buildDirectorEventApplyPrompt(state, event);
   return runCodexStructured({ prompt, outputSchema: directorEventPlanSchema, label: 'World Director · 사건 적용', runId,
-    thread: { threadId: director.activeThreadId, model: director.model || CODEX_MODEL, persistent: true },
+    thread: { threadId: director.activeThreadId, model: director.model || CODEX_MODEL, effort: director.reasoningEffort || 'high', persistent: true },
     validate: (result) => validateDirectorEventPlan(result, { requireScene: event.forceScene })
   });
 }
 
 export function generateDirectorSceneTransition(state, runId, director) {
-  updateRunMetadata(runId, { activeAgentType: 'director', activeAgentName: '월드 디렉터', activePhase: '장면 전환 판단', activeThreadId: director.activeThreadId || null });
+  updateRunMetadata(runId, { activeAgentType: 'director', activeAgentName: '월드 디렉터', activePhase: '장면 전환 판단', activeThreadId: director.activeThreadId || null, activeModel: director.model || CODEX_MODEL, activeEffort: director.reasoningEffort || 'high' });
   const prompt = buildDirectorSceneTransitionPrompt(state);
   return runCodexStructured({ prompt, outputSchema: directorEventPlanSchema, label: 'World Director · 장면 전환', runId,
-    thread: { threadId: director.activeThreadId, model: director.model || CODEX_MODEL, persistent: true },
+    thread: { threadId: director.activeThreadId, model: director.model || CODEX_MODEL, effort: director.reasoningEffort || 'high', persistent: true },
     validate: (result) => validateDirectorEventPlan(result, { requireScene: true })
   });
 }

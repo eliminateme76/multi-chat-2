@@ -29,6 +29,10 @@ This file is the current operational handoff between Codex sessions on the home 
 - The world editor now supports `현재 진행 초기화` and `별도 진행 만들기`.
 - Reset preserves the world/character/initial relationship template but clears scenes, dialogue, events, memories, operations and Codex thread links.
 - Clone creates an independent selectable project from the same initial settings without changing the source progression.
+- World settings now include separate model/reasoning controls for character defaults, World Director, and recommendation/utility calls.
+- Character settings can override model and reasoning effort independently or inherit the world defaults.
+- Model choices and supported effort levels come from app-server `model/list`; every `turn/start` receives the effective pair.
+- Runtime monitor thread cards and active-call details show the applied model and reasoning effort.
 
 ## Database migration
 
@@ -37,6 +41,8 @@ This file is the current operational handoff between Codex sessions on the home 
 - Run `npm run migrate` after pulling this change. It is safe to rerun.
 - New migration: `db/009_project_playthroughs.sql`
 - It adds the initial world snapshot and initial relationship values used by reset/clone.
+- New migration: `db/010_agent_runtime_settings.sql`
+- It adds project role defaults and per-character reasoning overrides.
 
 ## Verification completed
 
@@ -45,6 +51,8 @@ This file is the current operational handoff between Codex sessions on the home 
 - Automatic time transition was verified to reject before model generation when the conversation is not settled.
 - `npm run verify:api` passed after updating the verifier for queued progression operations and mid-conversation events.
 - Disposable lifecycle verification passed: clone created an empty Scene 1 with all characters, an inserted event was then removed by reset, and the disposable project was deleted.
+- Live app-server catalog verification found 7 selectable models and mapped their supported effort levels.
+- Runtime settings save, clone preservation, and a real `npm run verify:api` Codex turn all passed.
 
 ## Next checks
 
@@ -53,6 +61,7 @@ This file is the current operational handoff between Codex sessions on the home 
 3. Test automatic `시간 전환` after unanimous settlement and confirm a new scene is created.
 4. Review model pass frequency and adjust the CHAT prompt if characters end too early or keep repeating themselves.
 5. Confirm reset/clone wording and placement on a narrow/mobile viewport.
+6. Compare monitor timings for low/medium/high on representative CHAT turns before changing the shipped defaults.
 
 ## Known limitations
 

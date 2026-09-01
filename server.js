@@ -4,7 +4,7 @@ import pg from 'pg';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { generateCharacterSuggestion, generateCodexTurn } from './codex-client.js';
+import { generateCharacterSuggestion, generateCodexTurn, listCodexModels } from './codex-client.js';
 import { appendSceneEvent, buildTurnContext, getActiveParticipants, getStoryState, persistGeneratedTurn } from './story-engine.js';
 import { endStage, failRun, failStage, finishRun, snapshot, startRun, startStage, subscribe } from './runtime-telemetry.js';
 import { enqueueProgression, getOperation, resumeQueuedOperations } from './progression-runner.js';
@@ -20,6 +20,7 @@ const host = process.env.HOST || '0.0.0.0';
 const root = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PROJECT_ID = '00000000-0000-4000-8000-000000000001';
 const EVENT_TYPES = new Set(['일상', '관계', '연락', '선택', '발견', '돌발', '시간 전환', '분위기', '일반']);
+const REASONING_EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
 app.use(express.json());
 app.use(express.static(root));
 
@@ -28,6 +29,8 @@ const required = (value, name) => {
   return value.trim();
 };
 const optionalText = (value, fallback = '') => typeof value === 'string' ? value.trim() : fallback;
+const modelName = (value, fallback = null) => { const model = optionalText(value); if (!model) return fallback; if (model.length > 100) throw new Error('Model name is too long.'); return model; };
+const reasoningEffort = (value, fallback = null) => { const effort = optionalText(value); if (!effort) return fallback; if (!REASONING_EFFORTS.has(effort)) throw new Error('Invalid reasoning effort.'); return effort; };
 const projectIdFrom = (req) => {
   const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : DEFAULT_PROJECT_ID;
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(projectId)) throw new Error('Invalid projectId.');
@@ -36,6 +39,28 @@ const projectIdFrom = (req) => {
 
 app.get('/api/projects', async (_req, res, next) => {
   try { res.json((await pool.query('SELECT id,title,mood FROM projects ORDER BY created_at,title')).rows); } catch (error) { next(error); }
+});
+
+app.get('/api/models', async (_req, res, next) => {
+  try { res.json({ models: await listCodexModels() }); } catch (error) { next(error); }
+});
+
+app.put('/api/ai-settings', async (req, res, next) => {
+  try {
+    const projectId = projectIdFrom(req);
+    const settings = req.body;
+    const values = [projectId, modelName(settings.characterModel), reasoningEffort(settings.characterEffort), modelName(settings.directorModel), reasoningEffort(settings.directorEffort), modelName(settings.utilityModel), reasoningEffort(settings.utilityEffort)];
+    if (values.slice(1).some((value) => value == null)) throw new Error('All AI runtime settings are required.');
+    const catalog = new Map((await listCodexModels()).map((model) => [model.id, model]));
+    for (const [model, effort] of [[values[1],values[2]],[values[3],values[4]],[values[5],values[6]]]) {
+      if (!catalog.has(model)) throw new Error(`사용할 수 없는 모델입니다: ${model}`);
+      if (!catalog.get(model).efforts.includes(effort)) throw new Error(`${model}에서 지원하지 않는 추론 수준입니다: ${effort}`);
+    }
+    const result = await pool.query(`UPDATE projects SET default_model=$2,default_reasoning_effort=$3,director_model=$4,director_reasoning_effort=$5,
+      utility_model=$6,utility_reasoning_effort=$7,updated_at=NOW() WHERE id=$1`, values);
+    if (!result.rowCount) return res.status(404).json({ error: 'Project not found.' });
+    res.json(await getStoryState(pool, projectId));
+  } catch (error) { next(error); }
 });
 
 app.post('/api/projects/reset', async (req, res, next) => {
@@ -89,7 +114,7 @@ app.get('/api/runtime/threads', async (req, res, next) => {
   try {
     const projectId = projectIdFrom(req);
     const result = await pool.query(`SELECT 'character' AS kind,c.id AS "characterId",c.name,c.active_thread_id AS "threadId",
-      COALESCE(c.model_override,p.default_model) AS model,c.updated_at AS "updatedAt",
+      COALESCE(c.model_override,p.default_model) AS model,COALESCE(c.reasoning_effort_override,p.default_reasoning_effort) AS effort,c.updated_at AS "updatedAt",
       s.id AS "operationStepId",s.status AS "operationStepStatus",o.id AS "operationId",
       sp.idle_at_sequence AS "idleAtSequence",sp.idle_reason AS "idleReason",
       (sp.idle_at_sequence IS NOT NULL AND sp.idle_at_sequence >= COALESCE(last_entry.sequence,0)) AS "conversationIdle"
@@ -103,7 +128,7 @@ app.get('/api/runtime/threads', async (req, res, next) => {
       WHERE c.project_id=$1 AND c.active_thread_id IS NOT NULL
       UNION ALL
       SELECT 'director' AS kind,NULL AS "characterId",'월드 디렉터' AS name,p.active_director_thread_id AS "threadId",
-        p.default_model AS model,p.updated_at AS "updatedAt",NULL AS "operationStepId",NULL AS "operationStepStatus",NULL AS "operationId",
+        COALESCE(p.director_model,p.default_model) AS model,p.director_reasoning_effort AS effort,p.updated_at AS "updatedAt",NULL AS "operationStepId",NULL AS "operationStepStatus",NULL AS "operationId",
         NULL::bigint AS "idleAtSequence",NULL::text AS "idleReason",FALSE AS "conversationIdle"
       FROM projects p WHERE p.id=$1 AND p.active_director_thread_id IS NOT NULL`, [projectId]);
     res.json({ threads: result.rows.map((thread) => ({ ...thread, status: thread.operationStepStatus === 'RUNNING' ? 'running' : 'idle' })) });
@@ -128,7 +153,7 @@ app.post('/api/characters', async (req, res, next) => {
     const projectId = projectIdFrom(req); const character = req.body;
     const sort = (await pool.query('SELECT COALESCE(MAX(sort_order), -1)+1 AS next FROM characters WHERE project_id=$1', [projectId])).rows[0].next;
     const id = randomUUID();
-    await pool.query('INSERT INTO characters (id,project_id,name,role,gender,personality,speech_style,goal,secret,emoji,color,emotion,sort_order) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)', [id, projectId, required(character.name, 'name'), optionalText(character.role, '미정'), optionalText(character.gender, '미설정'), optionalText(character.personality), optionalText(character.speechStyle), optionalText(character.goal), optionalText(character.secret), '✧', '#5c9c9b', '기대', sort]);
+    await pool.query('INSERT INTO characters (id,project_id,name,role,gender,personality,speech_style,goal,secret,emoji,color,emotion,sort_order,model_override,reasoning_effort_override) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)', [id, projectId, required(character.name, 'name'), optionalText(character.role, '미정'), optionalText(character.gender, '미설정'), optionalText(character.personality), optionalText(character.speechStyle), optionalText(character.goal), optionalText(character.secret), '✧', '#5c9c9b', '기대', sort, modelName(character.modelOverride), reasoningEffort(character.reasoningEffortOverride)]);
     await pool.query(`INSERT INTO scene_participants(scene_id,character_id,joined_sequence)
       SELECT id,$2,$3 FROM scenes WHERE project_id=$1 AND status='active' ON CONFLICT DO NOTHING`, [projectId, id, Number((await pool.query('SELECT next_event_sequence FROM projects WHERE id=$1', [projectId])).rows[0].next_event_sequence)]);
     res.json(await getStoryState(pool, projectId));
@@ -167,7 +192,7 @@ app.get('/api/events/suggestions', async (req, res, next) => {
 app.put('/api/characters/:id', async (req, res, next) => {
   try {
     const projectId = projectIdFrom(req); const character = req.body;
-    const result = await pool.query('UPDATE characters SET name=$2,role=$3,gender=$4,personality=$5,speech_style=$6,goal=$7,secret=$8,updated_at=NOW() WHERE id=$1 AND project_id=$9', [req.params.id, required(character.name, 'name'), required(character.role, 'role'), required(character.gender, 'gender'), required(character.personality, 'personality'), required(character.speechStyle, 'speechStyle'), required(character.goal, 'goal'), required(character.secret, 'secret'), projectId]);
+    const result = await pool.query('UPDATE characters SET name=$2,role=$3,gender=$4,personality=$5,speech_style=$6,goal=$7,secret=$8,model_override=$9,reasoning_effort_override=$10,updated_at=NOW() WHERE id=$1 AND project_id=$11', [req.params.id, required(character.name, 'name'), required(character.role, 'role'), required(character.gender, 'gender'), required(character.personality, 'personality'), required(character.speechStyle, 'speechStyle'), required(character.goal, 'goal'), required(character.secret, 'secret'), modelName(character.modelOverride), reasoningEffort(character.reasoningEffortOverride), projectId]);
     if (!result.rowCount) return res.status(404).json({ error: 'Character not found.' });
     res.json(await getStoryState(pool, projectId));
   } catch (error) { next(error); }

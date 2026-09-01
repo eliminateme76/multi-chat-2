@@ -15,10 +15,43 @@ const AUTO_EVENT_TURN_INTERVAL = 12;
 const EVENT_TYPES = ['일상', '관계', '연락', '선택', '발견', '돌발', '시간 전환', '분위기'];
 let selectedAutoEventTypes = new Set(EVENT_TYPES);
 let currentProjectId = new URLSearchParams(window.location.search).get('project');
+let modelCatalog = [];
+const ALL_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
 const $ = (selector) => document.querySelector(selector);
 const esc = (text) => String(text).replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
 const characterById = (id) => state.characters.find((character) => character.id === id);
 const avatar = (character) => `<span class="avatar" style="background:${character.color}">${character.portraitUrl ? `<img src="${esc(character.portraitUrl)}" style="object-position:${esc(character.portraitPosition || '50%')} center" alt="${esc(character.name)} 얼굴" />` : character.emoji}</span>`;
+
+function fillModelSelect(select, value = '') {
+  const inherit = select.dataset.inherit;
+  const values = [...new Set(modelCatalog.map((model) => model.id).concat(value || []).filter(Boolean))];
+  select.innerHTML = `${inherit ? `<option value="">${esc(inherit)}</option>` : ''}${values.map((id) => { const model = modelCatalog.find((item) => item.id === id); return `<option value="${esc(id)}">${esc(model?.name || id)}</option>`; }).join('')}`;
+  select.value = value || '';
+}
+function fillEffortSelect(select, modelId, value = '') {
+  const inherit = select.dataset.inherit;
+  const supported = modelCatalog.find((model) => model.id === modelId)?.efforts?.filter(Boolean);
+  const efforts = [...new Set((supported?.length ? supported : ALL_EFFORTS).concat(value || []).filter(Boolean))];
+  select.innerHTML = `${inherit ? `<option value="">${esc(inherit)}</option>` : ''}${efforts.map((effort) => `<option value="${esc(effort)}">${esc(effort)}</option>`).join('')}`;
+  select.value = value || '';
+}
+function wireRuntimeSelects(form, values) {
+  const pairs = [
+    ['characterModel','characterEffort'],['directorModel','directorEffort'],['utilityModel','utilityEffort'],['modelOverride','reasoningEffortOverride']
+  ];
+  for (const [modelName, effortName] of pairs) {
+    const modelSelect = form.elements[modelName]; const effortSelect = form.elements[effortName];
+    if (!modelSelect || !effortSelect) continue;
+    fillModelSelect(modelSelect, values[modelName] || '');
+    fillEffortSelect(effortSelect, modelSelect.value || state?.aiSettings?.character.model, values[effortName] || '');
+    modelSelect.onchange = () => {
+      const selectedModel = modelSelect.value || state?.aiSettings?.character.model;
+      const model = modelCatalog.find((item) => item.id === selectedModel);
+      const nextEffort = model?.efforts?.includes(effortSelect.value) ? effortSelect.value : model?.defaultEffort || '';
+      fillEffortSelect(effortSelect, selectedModel, nextEffort);
+    };
+  }
+}
 
 async function api(url, options = {}) {
   const scopedUrl = currentProjectId && url !== '/api/projects' ? `${url}${url.includes('?') ? '&' : '?'}projectId=${encodeURIComponent(currentProjectId)}` : url;
@@ -175,10 +208,11 @@ async function maybeInjectAutomaticEvent() {
   } finally { autoEventInFlight = false; renderTurnControls(); }
   return false;
 }
-function openCharacterModal(id) { editingId = id || null; const c = id ? characterById(id) : {}; $('#character-modal-title').textContent = id ? `${c.name} Agent 편집` : '새 캐릭터 만들기'; for (const key of ['name', 'gender', 'role', 'personality', 'speechStyle', 'goal', 'secret']) $('#character-form').elements[key].value = c[key] || (key === 'gender' ? '여성' : ''); $('#character-modal').showModal(); }
+function openCharacterModal(id) { editingId = id || null; const c = id ? characterById(id) : {}; const form = $('#character-form'); $('#character-modal-title').textContent = id ? `${c.name} Agent 편집` : '새 캐릭터 만들기'; for (const key of ['name', 'gender', 'role', 'personality', 'speechStyle', 'goal', 'secret']) form.elements[key].value = c[key] || (key === 'gender' ? '여성' : ''); wireRuntimeSelects(form, { modelOverride: c.modelOverride || '', reasoningEffortOverride: c.reasoningEffortOverride || '' }); $('#character-modal').showModal(); }
 async function saveCharacter() { const form = $('#character-form'); if (!form.reportValidity()) return; try { setState(await api(editingId ? `/api/characters/${editingId}` : '/api/characters', { method: editingId ? 'PUT' : 'POST', body: JSON.stringify(Object.fromEntries(new FormData(form))) })); $('#character-modal').close(); } catch (error) { alert(error.message); } }
-function openWorldModal() { const form = $('#world-form'); Object.entries(state.world).forEach(([key, value]) => { form.elements[key].value = value; }); $('#world-modal').showModal(); }
+function openWorldModal() { const form = $('#world-form'); Object.entries(state.world).forEach(([key, value]) => { form.elements[key].value = value; }); wireRuntimeSelects(form, { characterModel: state.aiSettings.character.model, characterEffort: state.aiSettings.character.reasoningEffort, directorModel: state.aiSettings.director.model, directorEffort: state.aiSettings.director.reasoningEffort, utilityModel: state.aiSettings.utility.model, utilityEffort: state.aiSettings.utility.reasoningEffort }); $('#world-modal').showModal(); }
 async function saveWorld() { const form = $('#world-form'); if (!form.reportValidity()) return; try { setState(await api('/api/world', { method: 'PUT', body: JSON.stringify(Object.fromEntries(new FormData(form))) })); $('#world-modal').close(); } catch (error) { alert(error.message); } }
+async function saveAiSettings() { const form = $('#world-form'); const data = Object.fromEntries(new FormData(form)); try { setState(await api('/api/ai-settings', { method: 'PUT', body: JSON.stringify(data) })); $('#save-status').textContent = 'AI 실행 설정 저장됨'; } catch (error) { alert(error.message); } }
 async function loadProjectOptions(selectedId = currentProjectId) {
   const projects = await api('/api/projects');
   if (!projects.length) throw new Error('등록된 세계관이 없습니다.');
@@ -234,6 +268,7 @@ $('#suggest-button').onclick = async () => {
 $('#character-form').onsubmit = (event) => { event.preventDefault(); saveCharacter(); }; $('#world-form').onsubmit = (event) => { event.preventDefault(); saveWorld(); };
 $('#reset-playthrough-button').onclick = resetCurrentPlaythrough;
 $('#clone-playthrough-button').onclick = cloneCurrentPlaythrough;
+$('#save-ai-settings-button').onclick = saveAiSettings;
 $('#ai-character-button').onclick = async () => {
   const button = $('#ai-character-button');
   const form = $('#character-form');
@@ -265,6 +300,7 @@ async function selectProject(projectId) {
 }
 async function initialize() {
   try {
+    try { modelCatalog = (await api('/api/models')).models || []; } catch { modelCatalog = [{ id: 'gpt-5.6-sol', name: 'gpt-5.6-sol', efforts: ALL_EFFORTS }]; }
     const projects = await loadProjectOptions(currentProjectId);
     if (!projects.some((project) => project.id === currentProjectId)) currentProjectId = projects[0].id;
     $('#project-select').onchange = (event) => selectProject(event.target.value).catch((error) => { $('#save-status').textContent = '전환 실패'; alert(error.message); });

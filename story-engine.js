@@ -5,7 +5,9 @@ import { endStage, failStage, startStage } from './runtime-telemetry.js';
 
 export async function getStoryState(queryable, projectId) {
   const project = (await queryable.query(`
-    SELECT p.id,p.title,p.rules,p.turn_number AS turn,
+    SELECT p.id,p.title,p.rules,p.turn_number AS turn,p.default_model AS "defaultModel",p.default_reasoning_effort AS "defaultReasoningEffort",
+      COALESCE(p.director_model,p.default_model) AS "directorModel",p.director_reasoning_effort AS "directorReasoningEffort",
+      COALESCE(p.utility_model,p.default_model) AS "utilityModel",p.utility_reasoning_effort AS "utilityReasoningEffort",
       s.id AS "sceneId",s.scene_number AS "sceneNumber",s.location,s.mood,s.scene_time AS time,
       s.description,s.summary AS "sceneSummary",s.public_direction AS "publicDirection",s.presentation_mode AS "presentationMode",
       s.progress_signal AS "sceneSignal"
@@ -16,7 +18,9 @@ export async function getStoryState(queryable, projectId) {
     WHERE p.id=$1`, [projectId])).rows[0];
   if (!project || !project.sceneId) return null;
   const characters = await queryable.query(`SELECT c.id,c.name,c.role,c.gender,c.portrait_url AS "portraitUrl",c.portrait_position AS "portraitPosition",c.emoji,c.color,c.personality,c.speech_style AS "speechStyle",c.goal,c.secret,c.emotion,
-    active_thread_id AS "activeThreadId",model_override AS "modelOverride",COALESCE(model_override,p.default_model) AS "effectiveModel",current_state AS "currentState",last_scanned_event_sequence AS "lastScannedEventSequence"
+    active_thread_id AS "activeThreadId",model_override AS "modelOverride",reasoning_effort_override AS "reasoningEffortOverride",
+    COALESCE(model_override,p.default_model) AS "effectiveModel",COALESCE(reasoning_effort_override,p.default_reasoning_effort) AS "effectiveReasoningEffort",
+    current_state AS "currentState",last_scanned_event_sequence AS "lastScannedEventSequence"
     FROM characters c JOIN projects p ON p.id=c.project_id WHERE c.project_id=$1 ORDER BY sort_order`, [projectId]);
   const relationships = await queryable.query('SELECT from_character_id AS "from",to_character_id AS "to",label,score FROM relationships WHERE project_id=$1 ORDER BY created_at', [projectId]);
   const participantStates = await queryable.query(`SELECT sp.character_id AS "characterId",sp.idle_at_sequence AS "idleAtSequence",sp.idle_reason AS "idleReason",sp.idle_at AS "idleAt"
@@ -34,6 +38,11 @@ export async function getStoryState(queryable, projectId) {
     world: { title: project.title, location: project.location, mood: project.mood, time: project.time, description: project.description, rules: project.rules },
     sceneNumber: project.sceneNumber, sceneSummary: project.sceneSummary, sceneSignal: project.sceneSignal, presentationMode: project.presentationMode,
     publicDirection: project.publicDirection, directorNote: project.publicDirection, turn: project.turn,
+    aiSettings: {
+      character: { model: project.defaultModel, reasoningEffort: project.defaultReasoningEffort },
+      director: { model: project.directorModel, reasoningEffort: project.directorReasoningEffort },
+      utility: { model: project.utilityModel, reasoningEffort: project.utilityReasoningEffort }
+    },
     characters: characters.rows.map((character) => ({ ...character, conversation: participants.find((participant) => participant.characterId === character.id) || null })), relationships: relationships.rows,
     participants, conversationSettled: participants.length > 0 && participants.every((participant) => participant.idle), latestSceneSequence,
     logs: entries.rows.map((entry) => entry.type === 'event' ? { id: entry.id, type: 'event', eventType: entry.eventType, text: entry.eventText, sortOrder: entry.sortOrder, sceneNumber: entry.sceneNumber } : entry)
@@ -62,7 +71,9 @@ export async function buildTurnContext(queryable, projectId, runId) {
 
 export async function getActiveParticipants(queryable, projectId) {
   const result = await queryable.query(`SELECT c.id,c.name,c.role,c.gender,c.portrait_url AS "portraitUrl",c.portrait_position AS "portraitPosition",c.emoji,c.color,c.personality,c.speech_style AS "speechStyle",c.goal,c.secret,c.emotion,
-    c.active_thread_id AS "activeThreadId",c.model_override AS "modelOverride",COALESCE(c.model_override,p.default_model) AS "effectiveModel",c.current_state AS "currentState",c.last_scanned_event_sequence AS "lastScannedEventSequence",
+    c.active_thread_id AS "activeThreadId",c.model_override AS "modelOverride",c.reasoning_effort_override AS "reasoningEffortOverride",
+    COALESCE(c.model_override,p.default_model) AS "effectiveModel",COALESCE(c.reasoning_effort_override,p.default_reasoning_effort) AS "effectiveReasoningEffort",
+    c.current_state AS "currentState",c.last_scanned_event_sequence AS "lastScannedEventSequence",
     sp.idle_at_sequence AS "idleAtSequence",sp.idle_reason AS "idleReason",sp.idle_at AS "idleAt"
     FROM scenes s JOIN scene_participants sp ON sp.scene_id=s.id AND sp.left_sequence IS NULL JOIN characters c ON c.id=sp.character_id JOIN projects p ON p.id=c.project_id
     WHERE s.project_id=$1 AND s.status='active' ORDER BY c.sort_order`, [projectId]);
@@ -126,7 +137,8 @@ export async function persistGeneratedTurn(client, context, turn) {
 export async function getDirectorContext(queryable, projectId) {
   const state = await getStoryState(queryable, projectId);
   if (!state) return null;
-  const director = (await queryable.query(`SELECT active_director_thread_id AS "activeThreadId",last_director_event_sequence AS "lastScannedEventSequence",default_model AS model
+  const director = (await queryable.query(`SELECT active_director_thread_id AS "activeThreadId",last_director_event_sequence AS "lastScannedEventSequence",
+    COALESCE(director_model,default_model) AS model,director_reasoning_effort AS "reasoningEffort"
     FROM projects WHERE id=$1`, [projectId])).rows[0];
   return { state, ...director };
 }
