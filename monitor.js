@@ -35,8 +35,29 @@ function render() {
   $('#app-server-state').textContent = appServer.status || 'idle';
   $('#app-server-state').className = appServer.status === 'ready' ? 'status-completed' : appServer.status === 'stopped' ? 'status-failed' : 'status-running';
   $('#app-server-detail').textContent = appServer.pid ? `PID ${appServer.pid}` : '';
+  renderActiveThread();
   renderPipeline(run); renderWaterfall(run, bottleneck); renderHistory(); renderThreads(); renderStageMetrics();
   showNode(selectedStageName || runningStage?.name || bottleneck?.name, run);
+}
+
+function allTrackedThreads() {
+  return [...threads, ...observedThreads()];
+}
+
+function renderActiveThread() {
+  const active = allTrackedThreads().find((thread) => thread.status === 'running');
+  const title = $('#active-thread-title');
+  const detail = $('#active-thread-detail');
+  if (!active) {
+    title.textContent = '대기';
+    title.className = '';
+    detail.textContent = '실행 중인 스레드가 없습니다';
+    return;
+  }
+  const compactId = active.threadId.length > 22 ? `${active.threadId.slice(0, 11)}…${active.threadId.slice(-8)}` : active.threadId;
+  title.textContent = active.name;
+  title.className = 'status-running';
+  detail.textContent = `${active.detail || active.model || '기본 모델'} · ${compactId}`;
 }
 
 function renderPipeline(run) {
