@@ -19,6 +19,10 @@ export async function getStoryState(queryable, projectId) {
     active_thread_id AS "activeThreadId",model_override AS "modelOverride",COALESCE(model_override,p.default_model) AS "effectiveModel",current_state AS "currentState",last_scanned_event_sequence AS "lastScannedEventSequence"
     FROM characters c JOIN projects p ON p.id=c.project_id WHERE c.project_id=$1 ORDER BY sort_order`, [projectId]);
   const relationships = await queryable.query('SELECT from_character_id AS "from",to_character_id AS "to",label,score FROM relationships WHERE project_id=$1 ORDER BY created_at', [projectId]);
+  const participantStates = await queryable.query(`SELECT sp.character_id AS "characterId",sp.idle_at_sequence AS "idleAtSequence",sp.idle_reason AS "idleReason",sp.idle_at AS "idleAt"
+    FROM scene_participants sp WHERE sp.scene_id=$1 AND sp.left_sequence IS NULL`, [project.sceneId]);
+  const latestSceneSequence = Number((await queryable.query('SELECT COALESCE(MAX(world_sequence),0) AS sequence FROM scene_entries WHERE scene_id=$1', [project.sceneId])).rows[0].sequence);
+  const participants = participantStates.rows.map((participant) => ({ ...participant, idle: participant.idleAtSequence != null && Number(participant.idleAtSequence) >= latestSceneSequence }));
   const entries = await queryable.query(`SELECT e.id,e.entry_type AS type,e.character_id AS "characterId",e.dialogue AS text,e.action,
       e.event_text AS "eventText",e.event_type AS "eventType",e.sort_order AS "sortOrder",e.world_sequence AS "worldSequence",e.actor_type AS "actorType",e.event_kind AS "eventKind",e.payload,s.scene_number AS "sceneNumber"
     FROM scene_entries e
@@ -30,7 +34,8 @@ export async function getStoryState(queryable, projectId) {
     world: { title: project.title, location: project.location, mood: project.mood, time: project.time, description: project.description, rules: project.rules },
     sceneNumber: project.sceneNumber, sceneSummary: project.sceneSummary, sceneSignal: project.sceneSignal, presentationMode: project.presentationMode,
     publicDirection: project.publicDirection, directorNote: project.publicDirection, turn: project.turn,
-    characters: characters.rows, relationships: relationships.rows,
+    characters: characters.rows.map((character) => ({ ...character, conversation: participants.find((participant) => participant.characterId === character.id) || null })), relationships: relationships.rows,
+    participants, conversationSettled: participants.length > 0 && participants.every((participant) => participant.idle), latestSceneSequence,
     logs: entries.rows.map((entry) => entry.type === 'event' ? { id: entry.id, type: 'event', eventType: entry.eventType, text: entry.eventText, sortOrder: entry.sortOrder, sceneNumber: entry.sceneNumber } : entry)
   };
 }
@@ -57,7 +62,8 @@ export async function buildTurnContext(queryable, projectId, runId) {
 
 export async function getActiveParticipants(queryable, projectId) {
   const result = await queryable.query(`SELECT c.id,c.name,c.role,c.gender,c.portrait_url AS "portraitUrl",c.portrait_position AS "portraitPosition",c.emoji,c.color,c.personality,c.speech_style AS "speechStyle",c.goal,c.secret,c.emotion,
-    c.active_thread_id AS "activeThreadId",c.model_override AS "modelOverride",COALESCE(c.model_override,p.default_model) AS "effectiveModel",c.current_state AS "currentState",c.last_scanned_event_sequence AS "lastScannedEventSequence"
+    c.active_thread_id AS "activeThreadId",c.model_override AS "modelOverride",COALESCE(c.model_override,p.default_model) AS "effectiveModel",c.current_state AS "currentState",c.last_scanned_event_sequence AS "lastScannedEventSequence",
+    sp.idle_at_sequence AS "idleAtSequence",sp.idle_reason AS "idleReason",sp.idle_at AS "idleAt"
     FROM scenes s JOIN scene_participants sp ON sp.scene_id=s.id AND sp.left_sequence IS NULL JOIN characters c ON c.id=sp.character_id JOIN projects p ON p.id=c.project_id
     WHERE s.project_id=$1 AND s.status='active' ORDER BY c.sort_order`, [projectId]);
   return result.rows;
@@ -86,8 +92,17 @@ export async function nextEntryOrder(queryable, sceneId) {
 
 export async function persistGeneratedTurn(client, context, turn) {
   const { state, character } = context;
+  if (!turn.shouldRespond) {
+    const sequence = Number((await client.query('SELECT COALESCE(MAX(world_sequence),0) AS sequence FROM scene_entries WHERE scene_id=$1', [state.sceneId])).rows[0].sequence);
+    await client.query(`UPDATE scene_participants SET idle_at_sequence=$3,idle_reason=$4,idle_at=NOW()
+      WHERE scene_id=$1 AND character_id=$2 AND left_sequence IS NULL`, [state.sceneId, character.id, sequence, turn.silenceReason.slice(0, 300)]);
+    await client.query('UPDATE characters SET active_thread_id=$2,last_scanned_event_sequence=$3,pending_operation_step_id=NULL,updated_at=NOW() WHERE id=$1', [character.id, turn.threadId, sequence]);
+    await client.query('UPDATE projects SET turn_number=turn_number+1,updated_at=NOW() WHERE id=$1', [state.projectId]);
+    return { skipped: true, entryId: null, sequence, silenceReason: turn.silenceReason };
+  }
   const entryId = randomUUID();
   const sequence = await nextWorldSequence(client, state.projectId);
+  await client.query("UPDATE scene_participants SET idle_at_sequence=NULL,idle_reason='',idle_at=NULL WHERE scene_id=$1 AND left_sequence IS NULL", [state.sceneId]);
   await client.query(`INSERT INTO scene_entries (id,project_id,scene_id,entry_type,character_id,dialogue,action,sort_order,world_sequence,actor_type,event_kind,payload)
     VALUES ($1,$2,$3,'message',$4,$5,$6,$7,$8,'CHARACTER','CHARACTER_RESPONSE',$9)`, [entryId, state.projectId, state.sceneId, character.id, turn.dialogue, turn.action, await nextEntryOrder(client, state.sceneId), sequence, JSON.stringify({ dialogue: turn.dialogue, action: turn.action, emotion: turn.emotion, sceneSignal: turn.sceneSignal })]);
   await client.query(`INSERT INTO scene_entry_recipients(entry_id,character_id) SELECT $1,character_id FROM scene_participants WHERE scene_id=$2 AND left_sequence IS NULL ON CONFLICT DO NOTHING`, [entryId, state.sceneId]);
@@ -153,9 +168,16 @@ export async function appendSceneEvent(client, projectId, { text, eventType = 'ì
   if (!state) throw new Error('Project not found.');
   const entryId = randomUUID();
   const sequence = await nextWorldSequence(client, projectId);
+  await client.query("UPDATE scene_participants SET idle_at_sequence=NULL,idle_reason='',idle_at=NULL WHERE scene_id=$1 AND left_sequence IS NULL", [state.sceneId]);
   await client.query(`INSERT INTO scene_entries (id,project_id,scene_id,entry_type,event_text,event_type,sort_order,world_sequence,actor_type,event_kind,payload)
     VALUES ($1,$2,$3,'event',$4,$5,$6,$7,$8,$9,$10)`, [entryId, projectId, state.sceneId, text, eventType, await nextEntryOrder(client, state.sceneId), sequence, actorType, actorType === 'USER' ? 'USER_MESSAGE' : 'DIRECTOR_EVENT', JSON.stringify({ text, eventType })]);
   const targets = Array.isArray(recipientIds) && recipientIds.length ? recipientIds : (await client.query('SELECT character_id FROM scene_participants WHERE scene_id=$1 AND left_sequence IS NULL', [state.sceneId])).rows.map((row) => row.character_id);
   for (const characterId of targets) await client.query('INSERT INTO scene_entry_recipients(entry_id,character_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [entryId, characterId]);
   return { entryId, sequence };
+}
+
+export async function getConversationSettlement(queryable, projectId) {
+  const state = await getStoryState(queryable, projectId);
+  if (!state) return null;
+  return { sceneId: state.sceneId, settled: state.conversationSettled, latestSequence: state.latestSceneSequence, participants: state.participants };
 }

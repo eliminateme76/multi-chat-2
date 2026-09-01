@@ -3,7 +3,7 @@ let editingId = null;
 let autoTimer = null;
 let autoEnabled = false;
 let turnInFlight = false;
-let pendingEventTurn = false;
+let pendingEventAction = null;
 let directorTab = 'state';
 let typingCharacter = null;
 let consecutiveSilentTurns = 0;
@@ -11,7 +11,7 @@ let eventSuggestions = [];
 let autoEventEnabled = false;
 let autoEventInFlight = false;
 let turnsSinceAutoEvent = 0;
-const AUTO_EVENT_TURN_INTERVAL = 6;
+const AUTO_EVENT_TURN_INTERVAL = 12;
 const EVENT_TYPES = ['일상', '관계', '연락', '선택', '발견', '돌발', '시간 전환', '분위기'];
 let selectedAutoEventTypes = new Set(EVENT_TYPES);
 let currentProjectId = new URLSearchParams(window.location.search).get('project');
@@ -27,7 +27,7 @@ async function api(url, options = {}) {
   if (!response.ok) throw new Error(body.error || '요청에 실패했습니다.');
   return body;
 }
-function setState(nextState) { state = nextState; currentProjectId = nextState.projectId; $('#project-select').value = currentProjectId; $('#save-status').textContent = 'PostgreSQL 저장됨'; render(); }
+function setState(nextState) { state = nextState; currentProjectId = nextState.projectId; $('#project-select').value = currentProjectId; $('#monitor-link').href = `./monitor.html?project=${encodeURIComponent(currentProjectId)}`; $('#save-status').textContent = 'PostgreSQL 저장됨'; render(); }
 function setDirectorTab(tab) {
   directorTab = tab;
   document.querySelectorAll('[data-director-tab]').forEach((button) => { const active = button.dataset.directorTab === tab; button.classList.toggle('is-active', active); button.setAttribute('aria-selected', String(active)); });
@@ -51,7 +51,7 @@ function renderTurnControls() {
 }
 function render() {
   $('#world-title').textContent = state.world.title; $('#scene-number').textContent = String(state.sceneNumber).padStart(2, '0'); $('#scene-location-compact').textContent = state.world.location; $('#scene-location').textContent = state.world.location; $('#scene-description').textContent = state.world.description; $('#scene-time').textContent = state.world.time; $('#scene-mood').textContent = state.world.mood; $('#scene-mood-compact').textContent = state.world.mood; $('#director-note').textContent = state.directorNote; renderTurnControls(); setDirectorTab(directorTab);
-  $('#character-list').innerHTML = state.characters.map((character, index) => `<button class="character ${(typingCharacter?.id === character.id || (!typingCharacter && index === state.turn % state.characters.length)) ? 'selected' : ''}" data-edit="${character.id}">${avatar(character)}<span><strong>${esc(character.name)}</strong><small>${esc(character.gender)} · ${esc(character.role)}</small><small>${typingCharacter?.id === character.id ? '입력 중…' : esc(character.emotion)}</small></span></button>`).join('');
+  $('#character-list').innerHTML = state.characters.map((character, index) => `<button class="character ${(typingCharacter?.id === character.id || (!typingCharacter && !state.conversationSettled && index === state.turn % state.characters.length)) ? 'selected' : ''}" data-edit="${character.id}">${avatar(character)}<span><strong>${esc(character.name)}</strong><small>${esc(character.gender)} · ${esc(character.role)}</small><small>${typingCharacter?.id === character.id ? '입력 중…' : character.conversation?.idle ? '대화 종료' : esc(character.emotion)}</small></span></button>`).join('');
   document.querySelectorAll('[data-edit]').forEach((button) => { button.onclick = () => openCharacterModal(button.dataset.edit); });
   $('#conversation-log').classList.toggle('chat-mode', state.presentationMode === 'chat');
   const typingMessage = state.presentationMode === 'chat' && typingCharacter ? `<article class="message typing-message">${avatar(typingCharacter)}<div><div class="message-meta"><span class="message-name">${esc(typingCharacter.name)}</span></div><p class="typing-indicator"><i></i><i></i><i></i><span>입력 중</span></p></div></article>` : '';
@@ -94,12 +94,15 @@ async function advanceTurn() {
   renderTurnControls();
   try {
     const participants = (await api('/api/participants')).participants;
-    typingCharacter = participants[0] || null;
+    typingCharacter = null;
     render();
     const queued = await api('/api/turns', { method: 'POST' });
     let operation;
     for (let attempt = 0; attempt < 240; attempt += 1) {
       operation = await api(`/api/operations/${queued.operationId}`);
+      const runningStep = operation.steps?.find((step) => step.status === 'RUNNING');
+      const actualTypingCharacter = runningStep ? participants.find((character) => character.id === runningStep.characterId) || characterById(runningStep.characterId) : null;
+      if (typingCharacter?.id !== actualTypingCharacter?.id) { typingCharacter = actualTypingCharacter; render(); }
       if (operation.status === 'COMPLETED' || operation.status === 'FAILED') break;
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
@@ -107,17 +110,18 @@ async function advanceTurn() {
     const nextState = await api('/api/state');
     typingCharacter = null;
     setState(nextState);
-    if (nextState.logs.length) {
+    const messagesCreated = Number(operation.result?.messagesCreated || 0);
+    if (messagesCreated > 0) {
       consecutiveSilentTurns = 0;
-      turnsSinceAutoEvent += 1;
-      await maybeInjectAutomaticEvent();
+      turnsSinceAutoEvent += messagesCreated;
     } else {
       consecutiveSilentTurns += 1;
-      $('#save-status').textContent = `${nextState.turnOutcome?.characterName || '캐릭터'}은(는) 지금은 말하지 않음`;
-      if (autoEnabled && consecutiveSilentTurns >= state.characters.length) {
-        stopAutoProgress();
-        $('#save-status').textContent = '모두 조용함 · 자동 진행 멈춤';
-      }
+      $('#save-status').textContent = '이번 진행에서는 새 메시지가 없었습니다.';
+    }
+    const eventInjected = await maybeInjectAutomaticEvent();
+    if (nextState.conversationSettled && !eventInjected) {
+      stopAutoProgress();
+      $('#save-status').textContent = autoEventEnabled ? '모두 대화 종료 · 자동 사건을 기다림' : '모두 대화 종료 · 자동 진행 멈춤';
     }
     return true;
   } catch (error) {
@@ -130,20 +134,32 @@ async function advanceTurn() {
     turnInFlight = false;
     if (state) render();
     renderTurnControls();
-    if (pendingEventTurn) {
-      pendingEventTurn = false;
-      queueMicrotask(() => { if (!turnInFlight && state) advanceTurn(); });
+    if (pendingEventAction) {
+      const action = pendingEventAction;
+      pendingEventAction = null;
+      queueMicrotask(action);
     }
   }
 }
 async function refreshEventSuggestions() { eventSuggestions = (await api('/api/events/suggestions')).suggestions; renderSuggestions(); }
-async function addEvent(text, time = '', { automatic = false, eventType = '일반' } = {}) { if (!text.trim()) return false; try { setState(await api('/api/events', { method: 'POST', body: JSON.stringify({ text, time, eventType }) })); await refreshEventSuggestions(); setToolsOpen(false); turnsSinceAutoEvent = 0; if (turnInFlight) pendingEventTurn = true; else await advanceTurn(); return true; } catch (error) { if (automatic) throw error; alert(error.message); return false; } }
-async function applySuggestion(suggestionId, { automatic = false } = {}) { try { setState(await api(`/api/events/suggestions/${suggestionId}/apply`, { method: 'POST', body: JSON.stringify({}) })); await refreshEventSuggestions(); setToolsOpen(false); turnsSinceAutoEvent = 0; if (turnInFlight) pendingEventTurn = true; else await advanceTurn(); return true; } catch (error) { if (automatic) throw error; alert(error.message); return false; } }
+async function addEvent(text, time = '', { automatic = false, eventType = '일반' } = {}) {
+  if (!text.trim()) return false;
+  if (turnInFlight && !automatic) { pendingEventAction = () => addEvent(text, time, { automatic, eventType }); $('#save-status').textContent = '현재 응답 뒤에 사건 투입 대기 중…'; return true; }
+  try { setState(await api('/api/events', { method: 'POST', body: JSON.stringify({ text, time, eventType }) })); await refreshEventSuggestions(); setToolsOpen(false); turnsSinceAutoEvent = 0; if (!turnInFlight) await advanceTurn(); return true; } catch (error) { if (automatic) throw error; alert(error.message); return false; }
+}
+async function applySuggestion(suggestionId, { automatic = false } = {}) {
+  if (turnInFlight && !automatic) { pendingEventAction = () => applySuggestion(suggestionId, { automatic }); $('#save-status').textContent = '현재 응답 뒤에 사건 투입 대기 중…'; return true; }
+  try { setState(await api(`/api/events/suggestions/${suggestionId}/apply`, { method: 'POST', body: JSON.stringify({ automatic }) })); await refreshEventSuggestions(); setToolsOpen(false); turnsSinceAutoEvent = 0; if (!turnInFlight) await advanceTurn(); return true; } catch (error) { if (automatic) throw error; alert(error.message); return false; }
+}
 async function maybeInjectAutomaticEvent() {
-  if (!autoEventEnabled || autoEventInFlight || turnsSinceAutoEvent < AUTO_EVENT_TURN_INTERVAL) return;
+  if (!autoEventEnabled || autoEventInFlight) return false;
+  const settled = Boolean(state?.conversationSettled);
+  const desiredTypes = [...selectedAutoEventTypes].filter((type) => type !== '시간 전환' || settled);
+  const dueByMessages = turnsSinceAutoEvent >= AUTO_EVENT_TURN_INTERVAL;
+  const dueBySettlement = settled && selectedAutoEventTypes.has('시간 전환');
+  if ((!dueByMessages && !dueBySettlement) || !desiredTypes.length) return false;
   autoEventInFlight = true; $('#save-status').textContent = '자동 사건 생성 중…'; renderTurnControls();
   try {
-    const desiredTypes = [...selectedAutoEventTypes];
     const response = await api('/api/events/suggest', { method: 'POST', body: JSON.stringify({ desiredTypes }) });
     const suggestions = response.generatedSuggestions || response.suggestions;
     const eligible = suggestions.filter((suggestion) => selectedAutoEventTypes.has(suggestion.category));
@@ -151,11 +167,13 @@ async function maybeInjectAutomaticEvent() {
     const suggestion = eligible[Math.floor(Math.random() * eligible.length)];
     await applySuggestion(suggestion.id, { automatic: true });
     $('#save-status').textContent = `자동 사건 투입됨 · ${suggestion.category}`;
+    return true;
   } catch (error) {
     autoEventEnabled = false;
     $('#save-status').textContent = '자동 사건 실패';
     alert(`자동 사건 투입을 중지했습니다.\n${error.message}`);
   } finally { autoEventInFlight = false; renderTurnControls(); }
+  return false;
 }
 function openCharacterModal(id) { editingId = id || null; const c = id ? characterById(id) : {}; $('#character-modal-title').textContent = id ? `${c.name} Agent 편집` : '새 캐릭터 만들기'; for (const key of ['name', 'gender', 'role', 'personality', 'speechStyle', 'goal', 'secret']) $('#character-form').elements[key].value = c[key] || (key === 'gender' ? '여성' : ''); $('#character-modal').showModal(); }
 async function saveCharacter() { const form = $('#character-form'); if (!form.reportValidity()) return; try { setState(await api(editingId ? `/api/characters/${editingId}` : '/api/characters', { method: editingId ? 'PUT' : 'POST', body: JSON.stringify(Object.fromEntries(new FormData(form))) })); $('#character-modal').close(); } catch (error) { alert(error.message); } }

@@ -28,6 +28,26 @@ npm run dev
 
 Open `http://localhost:3000`. If WSL localhost forwarding is unavailable, find the WSL IP with `hostname -I` and open `http://<WSL_IP>:3000` from Windows.
 
+## Cross-computer handoff workflow
+
+This repository is worked on sequentially from two computers. GitHub `main` is the handoff channel; do not assume chat history is available on the other computer.
+
+At the beginning of every Codex work session:
+
+1. Read this file completely.
+2. Read [docs/HANDOFF.md](./docs/HANDOFF.md) and the relevant sections of [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md).
+3. Inspect `git status` and recent commits before editing. Never discard carried-over user changes.
+4. Apply pending migrations before running the application when HANDOFF reports schema changes.
+
+After every material implementation, Codex must update documentation without waiting for a separate user request:
+
+- update `docs/ARCHITECTURE.md` when boundaries, state, lifecycle, or behavior changed;
+- update `docs/HANDOFF.md` with completed work, migrations, verification results, known issues, and the concrete next steps;
+- remove stale items instead of only appending new notes;
+- include the documentation changes in the same commit as the implementation they describe.
+
+Before handing work to the other computer, run the relevant checks, commit all intended source and documentation changes, and push `main`. Never commit `.env`, credentials, local database files, or `node_modules`. If work is intentionally incomplete, use an explicit `wip:` commit and describe the exact continuation point in `docs/HANDOFF.md`.
+
 ## Core architecture
 
 ```text
@@ -81,11 +101,9 @@ pg_isready
 
 ## Current known limitations / next priorities
 
-1. Character suggestions use Codex, but world/event suggestions are still generic UI templates.
+1. Character and event suggestions use Codex; project creation/deletion UI is not implemented.
 2. Memory retrieval currently uses importance and recency; semantic retrieval and consolidation are deferred.
-3. Scene progress signals update public direction, but a separate LLM Director is not yet invoked for transitions.
-4. Projects can be selected, but project creation/deletion UI is not implemented.
-5. Auto-progress is browser-owned; a production runner should use server-side jobs and SSE.
+3. Auto-progress is browser-owned; a production runner should use server-side jobs and SSE.
 
 ## Conventions
 

@@ -29,7 +29,7 @@ PostgreSQL owns all durable state:
 - `characters`: character card, private goal/secret and current emotion
 - `relationships`: directed relationship labels and scores
 - `scene_entries`: ordered Events with actor and visibility metadata
-- `scene_participants`: per-Scene presence windows
+- `scene_participants`: per-Scene presence windows and each participant's current conversation-end vote
 - `scene_entry_recipients`: immutable per-event visibility snapshots
 - `world_operations`: durable infrastructure queue, not story-domain session state
 - `character_memories`: private observations available only to their owner
@@ -57,12 +57,12 @@ It must not send:
 
 1. Acquire a project-scoped advisory lock.
 2. Load the active scene and public state.
-3. Select one participant through `SpeakerSelector`.
+3. For CHAT auto-progress, enqueue every active participant so each can independently answer or pass. STORY/Manual progression uses the selected responders.
 4. Retrieve up to six private memories by importance and recency.
 5. Build a bounded prompt from the scene summary, six recent public entries and active character context.
-6. Generate structured output: dialogue, action, emotion, optional private memory, relationship changes and scene signal.
+6. Generate structured output including `shouldRespond` and a private `silenceReason`, plus dialogue, action, emotion, optional private memory, relationship changes and scene signal.
 7. Validate identifiers, lengths, deltas and signal values.
-8. In one transaction, append the public message, update emotion and relationships, store private memory, update the scene summary/signal and advance the turn cursor.
+8. In one transaction, either append and apply a public response or store only that participant's conversation-end vote. A public response or a new event invalidates all prior votes.
 9. Release the lock and return public state.
 
 No partial model result is persisted.
@@ -70,6 +70,20 @@ No partial model result is persisted.
 ## Speaker selection
 
 The initial selector is deterministic round-robin. Keeping it behind a module allows later rules such as participant presence, response urgency, cooldowns or an occasional LLM selector without changing generation or persistence code.
+
+## CHAT settlement and events
+
+Conversation settlement is a derived state, not a public chat message. A CHAT scene is settled only when every active participant has returned `shouldRespond=false` against the same latest scene-entry sequence. The vote stores a private reason for diagnostics, and becomes stale as soon as any character speaks or any event is appended.
+
+Events and time progression have deliberately different gates:
+
+- ordinary, contact, surprise, relationship and similar events may be injected during an active conversation;
+- automatic time transitions require unanimous settlement;
+- a user-selected time transition is an explicit override and may be applied immediately;
+- CHAT settlement does not itself create a new scene. It pauses character auto-progress and waits for an event;
+- STORY scenes continue to use `sceneSignal=complete` and Director-controlled scene transition.
+
+Automatic event cadence counts persisted character messages, not progression requests or silent decisions. The browser currently requests an event after 12 messages; before settlement it excludes `시간 전환` from the allowed automatic event types.
 
 ## Memory policy
 

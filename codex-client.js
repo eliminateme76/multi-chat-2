@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { buildCharacterSuggestionPrompt, buildCharacterTurnPrompt, buildEventSuggestionsPrompt, buildDirectorEventApplyPrompt, buildDirectorSceneTransitionPrompt } from './context-builder.js';
-import { endStage, failStage, recordStage, setRuntimeResource, startStage } from './runtime-telemetry.js';
+import { endStage, failStage, recordStage, setRuntimeResource, startStage, updateRunMetadata } from './runtime-telemetry.js';
 
 const CODEX_MODEL = process.env.CODEX_MODEL || 'gpt-5.6-sol';
 const TIMEOUT_MS = Number(process.env.CODEX_TURN_TIMEOUT_MS || 120000);
@@ -9,6 +9,7 @@ const APP_SERVER_CODEX_HOME = process.env.SCENEWEAVER_CODEX_HOME?.trim();
 const turnSchema = {
   type: 'object',
   properties: {
+    shouldRespond: { type: 'boolean' }, silenceReason: { type: 'string' },
     dialogue: { type: 'string' }, action: { type: 'string' }, emotion: { type: 'string' },
     memory: { type: 'string' }, memoryImportance: { type: 'integer', minimum: 0, maximum: 100 },
     relationshipChanges: {
@@ -21,7 +22,7 @@ const turnSchema = {
     },
     sceneSignal: { type: 'string', enum: ['continue', 'stalled', 'complete'] }
   },
-  required: ['dialogue', 'action', 'emotion', 'memory', 'memoryImportance', 'relationshipChanges', 'sceneSignal'],
+  required: ['shouldRespond', 'silenceReason', 'dialogue', 'action', 'emotion', 'memory', 'memoryImportance', 'relationshipChanges', 'sceneSignal'],
   additionalProperties: false
 };
 
@@ -245,6 +246,7 @@ function runCodexStructured(options) {
 process.once('exit', () => appServer?.destroy());
 
 export function generateCodexTurn(context) {
+  updateRunMetadata(context.runId, { activeAgentType: 'character', activeAgentName: context.character.name, activePhase: '캐릭터 응답 생성', activeCharacterId: context.character.id, activeCharacterName: context.character.name, activeThreadId: context.character.activeThreadId || null });
   const contextStage = startStage(context.runId, 'context_build');
   const prompt = buildCharacterTurnPrompt(context);
   endStage(context.runId, contextStage, { promptChars: prompt.length, publicLogs: Math.min(6, context.state.logs.length), privateMemories: context.memories.length });
@@ -252,15 +254,21 @@ export function generateCodexTurn(context) {
     prompt, outputSchema: turnSchema, label: `캐릭터 응답 · ${context.character.name}`, runId: context.runId,
     thread: { threadId: context.character.activeThreadId, model: context.character.effectiveModel || CODEX_MODEL, persistent: true },
     validate: (result) => {
+      if (typeof result.shouldRespond !== 'boolean' || typeof result.silenceReason !== 'string') throw new Error('invalid response decision');
       if (typeof result.emotion !== 'string' || !result.emotion.trim()) throw new Error('missing emotion');
-      if (typeof result.dialogue !== 'string' || (context.state.presentationMode === 'chat' && !result.dialogue.trim())) throw new Error('missing dialogue');
-      if (typeof result.action !== 'string' || (context.state.presentationMode !== 'chat' && !result.action.trim() && !result.dialogue.trim())) throw new Error('missing response content');
+      if (typeof result.dialogue !== 'string' || (result.shouldRespond && context.state.presentationMode === 'chat' && !result.dialogue.trim())) throw new Error('missing dialogue');
+      if (typeof result.action !== 'string' || (result.shouldRespond && context.state.presentationMode !== 'chat' && !result.action.trim() && !result.dialogue.trim())) throw new Error('missing response content');
       for (const field of ['dialogue', 'action', 'emotion']) result[field] = result[field].trim();
+      result.silenceReason = result.silenceReason.trim();
+      if (!result.shouldRespond && context.state.presentationMode !== 'chat') throw new Error('story characters must respond');
+      if (!result.shouldRespond && !result.silenceReason) throw new Error('missing silenceReason');
+      if (!result.shouldRespond && (result.dialogue || result.action)) throw new Error('silent response contains public content');
       if (typeof result.memory !== 'string') throw new Error('invalid memory');
       result.memory = result.memory.trim();
       if (!Number.isInteger(result.memoryImportance) || result.memoryImportance < 0 || result.memoryImportance > 100) throw new Error('invalid memoryImportance');
       if (!Array.isArray(result.relationshipChanges)) throw new Error('invalid relationshipChanges');
       if (!['continue', 'stalled', 'complete'].includes(result.sceneSignal)) throw new Error('invalid sceneSignal');
+      if (!result.shouldRespond && (result.memory || result.memoryImportance !== 0 || result.relationshipChanges.length || result.sceneSignal !== 'continue')) throw new Error('silent response contains state changes');
     }
   });
 }
@@ -272,6 +280,7 @@ export function generateResponderSelection(prompt, runId) {
 }
 
 export function generateDirectorResponderSelection(prompt, runId, director) {
+  updateRunMetadata(runId, { activeAgentType: 'director', activeAgentName: '월드 디렉터', activePhase: '응답자 선택', activeThreadId: director.activeThreadId || null });
   return runCodexStructured({ prompt, outputSchema: responderSchema, label: 'World Director · 응답자 선택', runId,
     thread: { threadId: director.activeThreadId, model: director.model || CODEX_MODEL, persistent: true },
     validate: (result) => { if (!Array.isArray(result.responders)) throw new Error('invalid responders'); }
@@ -313,6 +322,7 @@ export function generateEventSuggestions(state, runId, desiredTypes = []) {
 }
 
 export function generateDirectorEventSuggestions(state, runId, desiredTypes, director) {
+  updateRunMetadata(runId, { activeAgentType: 'director', activeAgentName: '월드 디렉터', activePhase: '사건 제안 생성', activeThreadId: director.activeThreadId || null });
   const contextStage = startStage(runId, 'context_build');
   const prompt = buildEventSuggestionsPrompt(state, desiredTypes, { director: true });
   endStage(runId, contextStage, { promptChars: prompt.length, publicLogs: Math.min(30, state.logs.length), director: true });
@@ -342,6 +352,7 @@ function validateDirectorEventPlan(result, { requireScene = false } = {}) {
 }
 
 export function generateDirectorEventApplication(state, event, runId, director) {
+  updateRunMetadata(runId, { activeAgentType: 'director', activeAgentName: '월드 디렉터', activePhase: '사건 적용 판단', activeThreadId: director.activeThreadId || null });
   const prompt = buildDirectorEventApplyPrompt(state, event);
   return runCodexStructured({ prompt, outputSchema: directorEventPlanSchema, label: 'World Director · 사건 적용', runId,
     thread: { threadId: director.activeThreadId, model: director.model || CODEX_MODEL, persistent: true },
@@ -350,6 +361,7 @@ export function generateDirectorEventApplication(state, event, runId, director) 
 }
 
 export function generateDirectorSceneTransition(state, runId, director) {
+  updateRunMetadata(runId, { activeAgentType: 'director', activeAgentName: '월드 디렉터', activePhase: '장면 전환 판단', activeThreadId: director.activeThreadId || null });
   const prompt = buildDirectorSceneTransitionPrompt(state);
   return runCodexStructured({ prompt, outputSchema: directorEventPlanSchema, label: 'World Director · 장면 전환', runId,
     thread: { threadId: director.activeThreadId, model: director.model || CODEX_MODEL, persistent: true },

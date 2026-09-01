@@ -74,15 +74,21 @@ app.get('/api/runtime/threads', async (req, res, next) => {
     const projectId = projectIdFrom(req);
     const result = await pool.query(`SELECT 'character' AS kind,c.id AS "characterId",c.name,c.active_thread_id AS "threadId",
       COALESCE(c.model_override,p.default_model) AS model,c.updated_at AS "updatedAt",
-      s.id AS "operationStepId",s.status AS "operationStepStatus",o.id AS "operationId"
+      s.id AS "operationStepId",s.status AS "operationStepStatus",o.id AS "operationId",
+      sp.idle_at_sequence AS "idleAtSequence",sp.idle_reason AS "idleReason",
+      (sp.idle_at_sequence IS NOT NULL AND sp.idle_at_sequence >= COALESCE(last_entry.sequence,0)) AS "conversationIdle"
       FROM characters c
       JOIN projects p ON p.id=c.project_id
+      LEFT JOIN LATERAL (SELECT id FROM scenes WHERE project_id=c.project_id AND status='active' ORDER BY scene_number DESC LIMIT 1) active_scene ON TRUE
+      LEFT JOIN scene_participants sp ON sp.scene_id=active_scene.id AND sp.character_id=c.id AND sp.left_sequence IS NULL
+      LEFT JOIN LATERAL (SELECT MAX(world_sequence) AS sequence FROM scene_entries WHERE scene_id=active_scene.id) last_entry ON TRUE
       LEFT JOIN world_operation_steps s ON s.id=c.pending_operation_step_id
       LEFT JOIN world_operations o ON o.id=s.operation_id
       WHERE c.project_id=$1 AND c.active_thread_id IS NOT NULL
       UNION ALL
       SELECT 'director' AS kind,NULL AS "characterId",'월드 디렉터' AS name,p.active_director_thread_id AS "threadId",
-        p.default_model AS model,p.updated_at AS "updatedAt",NULL AS "operationStepId",NULL AS "operationStepStatus",NULL AS "operationId"
+        p.default_model AS model,p.updated_at AS "updatedAt",NULL AS "operationStepId",NULL AS "operationStepStatus",NULL AS "operationId",
+        NULL::bigint AS "idleAtSequence",NULL::text AS "idleReason",FALSE AS "conversationIdle"
       FROM projects p WHERE p.id=$1 AND p.active_director_thread_id IS NOT NULL`, [projectId]);
     res.json({ threads: result.rows.map((thread) => ({ ...thread, status: thread.operationStepStatus === 'RUNNING' ? 'running' : 'idle' })) });
   } catch (error) { next(error); }
@@ -170,7 +176,8 @@ app.post('/api/events/suggestions/:id/apply', async (req, res, next) => {
   try {
     const projectId = projectIdFrom(req);
     runId = startRun({ type: 'director_event', projectId, metadata: { suggestionId: req.params.id } });
-    const result = await applyDirectorEvent(pool, projectId, {}, runId, req.params.id);
+    const automatic = req.body.automatic === true;
+    const result = await applyDirectorEvent(pool, projectId, {}, runId, req.params.id, { automatic });
     finishRun(runId, { suggestionId: req.params.id, sceneCreated: Boolean(result.outcome.sceneId) });
     res.json(result.state);
   } catch (error) { failRun(runId, error); next(error); }

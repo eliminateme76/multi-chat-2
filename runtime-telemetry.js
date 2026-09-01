@@ -59,6 +59,13 @@ export function finishRun(runId, metadata = {}) {
   publish('run', publicRun(run));
 }
 
+export function updateRunMetadata(runId, metadata = {}) {
+  const run = findRun(runId);
+  if (!run) return;
+  run.metadata = { ...run.metadata, ...metadata };
+  publish('run', publicRun(run));
+}
+
 export function failRun(runId, error) {
   const run = findRun(runId);
   if (!run) return;

@@ -26,6 +26,12 @@
         <article><span>총 시간 · APP SERVER</span><strong><span id="total-duration">—</span> · <span id="app-server-state">대기</span></strong><small id="app-server-detail"></small></article>
       </section>
 
+      <section class="metrics-panel">
+        <div class="panel-title"><div><span>CONTINUOUS TRACE</span><h2>연속 실행 타임라인</h2></div><small>실행별 누적 막대 · 구간에 마우스를 올리면 시간 비율 표시</small></div>
+        <div id="trace-chart" class="trace-chart" aria-label="실행별 단계 시간 비율 막대그래프"></div>
+        <div id="trace-timeline" class="trace-timeline"></div>
+      </section>
+
       <section class="canvas-panel">
         <div class="panel-title"><div><span>LIVE PIPELINE</span><h1>턴 실행 그래프</h1></div><small>현재 단계는 보라색으로 강조됩니다</small></div>
         <div id="pipeline" class="pipeline" aria-live="polite"></div>
@@ -45,11 +51,6 @@
           <div class="panel-title"><div><span>CODEX THREADS</span><h2>스레드 추적</h2></div><small id="thread-count">0개</small></div>
           <div id="thread-list" class="thread-list"></div>
         </article>
-      </section>
-      <section class="metrics-panel">
-        <div class="panel-title"><div><span>CONTINUOUS TRACE</span><h2>연속 실행 타임라인</h2></div><small>최근 200회 · 최신 실행이 아래에 추가됩니다</small></div>
-        <div id="trace-chart" class="trace-chart" aria-label="실행 시간 추세 그래프"></div>
-        <div id="trace-timeline" class="trace-timeline"></div>
       </section>
     </main>
     <script src="./monitor.js"></script>

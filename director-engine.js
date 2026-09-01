@@ -48,7 +48,7 @@ export async function createDirectorSuggestions(pool, projectId, desiredTypes, r
   } finally { client.release(); }
 }
 
-export async function applyDirectorEvent(pool, projectId, event, runId, suggestionId = null) {
+export async function applyDirectorEvent(pool, projectId, event, runId, suggestionId = null, { automatic = false } = {}) {
   const context = await getDirectorContext(pool, projectId);
   if (!context) throw new Error('Project not found.');
   const source = suggestionId
@@ -58,6 +58,9 @@ export async function applyDirectorEvent(pool, projectId, event, runId, suggesti
   const requested = source
     ? { text: source.text, eventType: source.category, time: source.time, forceScene: source.category === '시간 전환', stale: source.sourceSceneId !== context.state.sceneId }
     : { text: event.text, eventType: event.eventType || '일반', time: event.time || '', forceScene: event.eventType === '시간 전환', stale: false };
+  if (automatic && requested.eventType === '시간 전환' && !context.state.conversationSettled) {
+    throw new Error('자동 시간 전환은 모든 참가자가 현재 대화를 마친 뒤에만 가능합니다.');
+  }
   const plan = await generateDirectorEventApplication(context.state, requested, runId, context);
   const client = await pool.connect();
   try {

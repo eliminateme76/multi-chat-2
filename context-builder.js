@@ -14,8 +14,8 @@ export function buildCharacterTurnPrompt({ character, state, memories = [], visi
   const publicHistory = (visibleEvents.length ? visibleEvents : state.logs.slice(-6)).map((log) => publicLog(log, state)).join('\n\n');
 
   const outputStyle = state.presentationMode === 'chat'
-    ? `이 장면은 메신저 단체 채팅입니다. 이미 응답자로 선택되었으므로 실제로 보낼 짧은 메시지 1~2개를 작성하세요. 소설식 서술, 표정, 몸짓, 괄호 행동, 지문은 쓰지 마세요. action은 반드시 빈 문자열입니다.`
-    : `이미 응답자로 선택되었습니다. 대사는 1~3문장, 행동은 필요할 때 1문장으로 작성하세요.`;
+    ? `이 장면은 메신저 단체 채팅입니다. 먼저 지금 실제로 답장할 이유가 있는지 판단하세요. 직접 질문받았거나, 감정·목표상 반응이 필요하거나, 새롭고 자연스러운 내용을 보탤 수 있을 때만 shouldRespond=true로 하세요. 같은 동의·조언·확인을 반복할 뿐이면 shouldRespond=false, dialogue/action은 빈 문자열, silenceReason에는 비공개 판단 이유를 쓰세요. 답장한다면 실제 메시지 1~2개만 쓰고 소설식 지문은 금지하며 action은 빈 문자열입니다.`
+    : `shouldRespond=true, silenceReason은 빈 문자열로 작성하세요. 대사는 1~3문장, 행동은 필요할 때 1문장으로 작성하세요.`;
   return `당신은 한국어 이야기 시뮬레이션의 캐릭터 "${character.name}"입니다.
 
 캐릭터 카드와 비공개 정보:
@@ -47,12 +47,13 @@ ${publicHistory || '아직 공개 로그가 없습니다.'}
 규칙:
 1. 공개 정보, 자신의 카드와 자신의 기억만 사용하세요.
 2. 다른 캐릭터의 목표·비밀·기억 또는 비공개 Director 상태를 아는 척하지 마세요.
-    3. ${outputStyle}
+3. ${outputStyle}
 4. shouldRespond=true일 때만 현재 장면을 움직이는 관찰, 질문, 선택 또는 행동을 하나 포함하세요. "다음 장면으로 가자"처럼 메타적인 장면 전환을 제안하지 말고, 현재 장면 안에서 결말·반응·선택을 표현하세요. 장면 전환은 World Director만 수행합니다.
 5. memory는 이 캐릭터가 나중에 기억할 가치가 있는 새 사실만 한 문장으로 작성하고, 없으면 빈 문자열로 작성하세요.
 6. relationshipChanges에는 공개된 상호작용으로 실제 변화가 생긴 경우만 -10~10 범위로 작성하세요.
 7. sceneSignal은 계속 진행이면 continue, 반복되어 개입이 필요하면 stalled, 현재 장면 목표가 끝났으면 complete입니다.
-    8. 출력은 지정된 JSON schema만 만족해야 합니다.`;
+8. shouldRespond=false이면 memory는 빈 문자열, memoryImportance는 0, relationshipChanges는 빈 배열, sceneSignal은 continue로 작성하세요.
+9. 출력은 지정된 JSON schema만 만족해야 합니다.`;
 }
 
 export function buildResponderSelectionPrompt({ state, participants, minimum }) {
