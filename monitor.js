@@ -36,7 +36,7 @@ function render() {
   $('#app-server-state').className = appServer.status === 'ready' ? 'status-completed' : appServer.status === 'stopped' ? 'status-failed' : 'status-running';
   $('#app-server-detail').textContent = appServer.pid ? `PID ${appServer.pid}` : '';
   renderActiveThread();
-  renderPipeline(run); renderWaterfall(run, bottleneck); renderHistory(); renderThreads(); renderStageMetrics();
+  renderPipeline(run); renderWaterfall(run, bottleneck); renderHistory(); renderThreads(); renderTraceTimeline();
   showNode(selectedStageName || runningStage?.name || bottleneck?.name, run);
 }
 
@@ -126,22 +126,18 @@ function observedThreads() {
   return [...observed.values()].slice(0, 20);
 }
 
-function renderStageMetrics() {
-  const aggregates = new Map(stages.map(([name]) => [name, []]));
-  for (const run of selectedRuns()) {
-    for (const stage of run.stages || []) if (stage.durationMs != null && aggregates.has(stage.name)) aggregates.get(stage.name).push(stage.durationMs);
-  }
-  const rows = stages.map(([name, eyebrow, label]) => {
-    const values = aggregates.get(name);
-    if (!values.length) return '';
-    const average = values.reduce((sum, value) => sum + value, 0) / values.length;
-    const maximum = Math.max(...values);
-    const latest = values[0];
-    const averageWidth = Math.min(100, Math.max(0.5, average / WATERFALL_SCALE_MS * 100));
-    const maxPosition = Math.min(100, Math.max(0.5, maximum / WATERFALL_SCALE_MS * 100));
-    return `<div class="stage-metric"><div class="stage-metric-label"><strong>${esc(label)}</strong><span>${esc(eyebrow)} · ${values.length}회</span></div><div class="stage-metric-track" title="평균 ${ms(average)} · 최대 ${ms(maximum)}"><i style="width:${averageWidth}%"></i><b style="left:${maxPosition}%"></b></div><div class="stage-metric-values"><span>평균 ${ms(average)}</span><span>최대 ${ms(maximum)}</span><span>최근 ${ms(latest)}</span></div></div>`;
-  }).filter(Boolean);
-  $('#stage-metrics').innerHTML = rows.length ? rows.join('') : '<div class="empty">완료된 단계가 쌓이면 처리 시간 지표가 표시됩니다.</div>';
+function renderTraceTimeline() {
+  const runs = selectedRuns().slice(0, 200).toReversed();
+  $('#trace-timeline').innerHTML = runs.length ? runs.map((run) => {
+    const total = run.durationMs ?? Date.now() - Date.parse(run.startedAt);
+    const stageBlocks = (run.stages || []).map((stage) => {
+      const stageDuration = stage.durationMs ?? Date.now() - Date.parse(stage.startedAt);
+      const width = Math.max(36, Math.round(stageDuration / 1000 * 18));
+      const stageClass = stage.name.replaceAll('_', '-');
+      return `<div class="trace-stage ${stageClass} ${stage.status}" style="width:${width}px" title="${esc(labelFor(stage.name))} · ${ms(stageDuration)}"><strong>${esc(labelFor(stage.name))}</strong><span>${ms(stageDuration)}</span></div>`;
+    }).join('');
+    return `<article class="trace-run ${run.status}"><div class="trace-run-meta"><strong>${new Date(run.startedAt).toLocaleTimeString()} · ${esc(runLabel(run.type))}</strong><span class="status-${run.status}">${statusText(run.status)} · ${ms(total)}</span></div><div class="trace-stages">${stageBlocks || '<span class="trace-empty">단계 대기 중</span>'}</div></article>`;
+  }).join('') : '<div class="empty">실행이 시작되면 시간순 Trace가 여기에 계속 추가됩니다.</div>';
 }
 
 async function refreshThreads() {

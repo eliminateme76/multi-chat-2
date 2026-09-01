@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-const MAX_RUNS = 50;
+const MAX_RUNS = 200;
 const runs = [];
 const listeners = new Set();
 const resources = { appServer: { status: 'idle', pid: null, startedAt: null } };
