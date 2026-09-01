@@ -120,7 +120,7 @@ async function advanceTurn() {
     renderTurnControls();
   }
 }
-async function addEvent(text, time = '', { automatic = false, eventType = '일반' } = {}) { if (!text.trim()) return false; try { eventSuggestions = []; setState(await api('/api/events', { method: 'POST', body: JSON.stringify({ text, time, eventType }) })); turnsSinceAutoEvent = 0; return true; } catch (error) { if (automatic) throw error; alert(error.message); return false; } }
+async function addEvent(text, time = '', { automatic = false, eventType = '일반' } = {}) { if (!text.trim()) return false; try { setState(await api('/api/events', { method: 'POST', body: JSON.stringify({ text, time, eventType }) })); turnsSinceAutoEvent = 0; return true; } catch (error) { if (automatic) throw error; alert(error.message); return false; } }
 async function maybeInjectAutomaticEvent() {
   if (!autoEventEnabled || autoEventInFlight || turnsSinceAutoEvent < AUTO_EVENT_TURN_INTERVAL) return;
   autoEventInFlight = true; $('#save-status').textContent = '자동 사건 생성 중…'; renderTurnControls();
