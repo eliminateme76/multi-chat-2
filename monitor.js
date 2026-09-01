@@ -133,18 +133,7 @@ function observedThreads() {
 
 function renderTraceTimeline() {
   const runs = selectedRuns().slice(0, 200).toReversed();
-  const ribbon = $('#trace-ribbon');
-  const ribbonWasPinned = ribbon.scrollLeft + ribbon.clientWidth >= ribbon.scrollWidth - 12;
-  ribbon.innerHTML = runs.map((run) => {
-    const stageBlocks = (run.stages || []).map((stage) => {
-      const stageDuration = stage.durationMs ?? Date.now() - Date.parse(stage.startedAt);
-      const width = Math.max(48, Math.round(stageDuration / 1000 * 22));
-      const stageClass = stage.name.replaceAll('_', '-');
-      return `<div class="trace-stage ${stageClass} ${stage.status}" style="width:${width}px" title="${esc(runLabel(run.type))} · ${esc(labelFor(stage.name))} · ${ms(stageDuration)}"><strong>${esc(labelFor(stage.name))}</strong><span>${ms(stageDuration)}</span></div>`;
-    }).join('');
-    return `<div class="trace-ribbon-run"><span>${esc(runLabel(run.type))}</span>${stageBlocks}</div>`;
-  }).join('') || '<div class="empty">실행을 기다리고 있습니다.</div>';
-  if (ribbonWasPinned) ribbon.scrollLeft = ribbon.scrollWidth;
+  renderTraceChart(runs);
   $('#trace-timeline').innerHTML = runs.length ? runs.map((run) => {
     const total = run.durationMs ?? Date.now() - Date.parse(run.startedAt);
     const stageBlocks = (run.stages || []).map((stage) => {
@@ -155,6 +144,26 @@ function renderTraceTimeline() {
     }).join('');
     return `<article class="trace-run ${run.status}"><div class="trace-run-meta"><strong>${new Date(run.startedAt).toLocaleTimeString()} · ${esc(runLabel(run.type))}</strong><span class="status-${run.status}">${statusText(run.status)} · ${ms(total)}</span></div><div class="trace-stages">${stageBlocks || '<span class="trace-empty">단계 대기 중</span>'}</div></article>`;
   }).join('') : '<div class="empty">실행이 시작되면 시간순 Trace가 여기에 계속 추가됩니다.</div>';
+}
+
+function renderTraceChart(runs) {
+  const chart = $('#trace-chart');
+  if (!runs.length) { chart.innerHTML = '<div class="empty">실행이 쌓이면 소요 시간 추세가 표시됩니다.</div>'; return; }
+  const width = Math.max(720, runs.length * 46);
+  const height = 128;
+  const left = 34;
+  const bottom = 22;
+  const plotHeight = height - bottom - 12;
+  const durations = runs.map((run) => run.durationMs ?? Date.now() - Date.parse(run.startedAt));
+  const maximum = Math.max(1000, ...durations);
+  const xFor = (index) => left + (width - left - 12) * (runs.length === 1 ? 0.5 : index / (runs.length - 1));
+  const yFor = (duration) => 12 + (1 - duration / maximum) * plotHeight;
+  const points = runs.map((run, index) => `${xFor(index)},${yFor(durations[index])}`).join(' ');
+  const area = `${left},${height - bottom} ${points} ${width - 12},${height - bottom}`;
+  const typeClass = (type) => ({ progression: 'progression', character_suggestion: 'character-suggestion', event_suggestions: 'event-suggestions', turn: 'turn' })[type] || 'other';
+  const labels = runs.map((run, index) => index % Math.max(1, Math.ceil(runs.length / 7)) === 0 ? `<text x="${xFor(index)}" y="${height - 5}" text-anchor="middle">${new Date(run.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</text>` : '').join('');
+  const dots = runs.map((run, index) => `<circle class="${typeClass(run.type)} ${run.status}" cx="${xFor(index)}" cy="${yFor(durations[index])}" r="4"><title>${esc(`${new Date(run.startedAt).toLocaleTimeString()} · ${runLabel(run.type)} · ${ms(durations[index])} · ${statusText(run.status)}`)}</title></circle>`).join('');
+  chart.innerHTML = `<div class="trace-chart-legend"><span class="progression">월드 진행</span><span class="character-suggestion">캐릭터 추천</span><span class="event-suggestions">사건 추천</span><span class="turn">단일 턴</span></div><svg width="${width}" viewBox="0 0 ${width} ${height}" role="img" aria-label="실행별 총 소요시간 추세"><line x1="${left}" y1="12" x2="${width - 12}" y2="12"></line><line x1="${left}" y1="${height - bottom}" x2="${width - 12}" y2="${height - bottom}"></line><text x="2" y="17">${ms(maximum)}</text><text x="9" y="${height - bottom}">0</text><polygon points="${area}"></polygon><polyline points="${points}"></polyline>${dots}${labels}</svg>`;
 }
 
 async function refreshThreads() {
