@@ -108,19 +108,44 @@ export async function persistGeneratedTurn(client, context, turn) {
   return { skipped: false, entryId, sequence };
 }
 
-export async function createSceneFromEvent(client, projectId, eventText, nextTime = '', eventType = '일반') {
+export async function getDirectorContext(queryable, projectId) {
+  const state = await getStoryState(queryable, projectId);
+  if (!state) return null;
+  const director = (await queryable.query(`SELECT active_director_thread_id AS "activeThreadId",last_director_event_sequence AS "lastScannedEventSequence",default_model AS model
+    FROM projects WHERE id=$1`, [projectId])).rows[0];
+  return { state, ...director };
+}
+
+export async function updateDirectorThread(client, projectId, threadId, sequence = null) {
+  await client.query(`UPDATE projects SET active_director_thread_id=$2,
+    last_director_event_sequence=COALESCE($3,(SELECT COALESCE(MAX(world_sequence),0) FROM scene_entries WHERE project_id=$1)),updated_at=NOW()
+    WHERE id=$1`, [projectId, threadId, sequence]);
+}
+
+export async function createSceneFromEvent(client, projectId, event, legacyTime = '', legacyType = '일반') {
   const state = await getStoryState(client, projectId);
   if (!state) throw new Error('Project not found.');
+  const plan = typeof event === 'string'
+    ? { text: event, time: legacyTime, eventType: legacyType, location: state.world.location, mood: state.world.mood, description: `${event} ${state.world.description}`.slice(0, 300) }
+    : event;
   const nextSceneNumber = state.sceneNumber + 1;
-  const description = `${eventText} ${state.world.description}`.slice(0, 300);
-  const summary = `${state.sceneSummary}\n장면 전환 사건: ${eventText}`.slice(-1200);
+  const description = (plan.description || `${plan.text} ${state.world.description}`).slice(0, 300);
+  const summary = `${state.sceneSummary}\n장면 전환 사건: ${plan.text}`.slice(-1200);
   const sceneId = randomUUID();
-  const sceneTime = nextTime || state.world.time;
+  const sceneTime = plan.time || state.world.time;
+  const sequence = await nextWorldSequence(client, projectId);
   await client.query("UPDATE scenes SET status='completed',updated_at=NOW() WHERE project_id=$1 AND status='active'", [projectId]);
   await client.query(`INSERT INTO scenes (id,project_id,scene_number,location,mood,scene_time,description,summary,public_direction,private_director_state,presentation_mode)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, [sceneId, projectId, nextSceneNumber, state.world.location, state.world.mood, sceneTime, description, summary, '새 사건에 대한 각 인물의 서로 다른 반응을 드러내세요.', `사용자가 투입한 사건: ${eventText}`, state.presentationMode]);
-  await client.query('INSERT INTO scene_entries (id,project_id,scene_id,entry_type,event_text,event_type,sort_order) VALUES ($1,$2,$3,$4,$5,$6,0)', [randomUUID(), projectId, sceneId, 'event', eventText, eventType]);
-  await client.query('UPDATE projects SET scene_number=$2,description=$3,public_direction=$4,private_director_state=$5,scene_time=$6,updated_at=NOW() WHERE id=$1', [projectId, nextSceneNumber, description, '새 사건에 대한 각 인물의 서로 다른 반응을 드러내세요.', `사용자가 투입한 사건: ${eventText}`, sceneTime]);
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, [sceneId, projectId, nextSceneNumber, plan.location || state.world.location, plan.mood || state.world.mood, sceneTime, description, summary, '새 사건에 대한 각 인물의 서로 다른 반응을 드러내세요.', `Director 장면 전환: ${plan.text}`, state.presentationMode]);
+  await client.query(`INSERT INTO scene_participants(scene_id,character_id,joined_sequence)
+    SELECT $2,character_id,$3 FROM scene_participants WHERE scene_id=$1 AND left_sequence IS NULL`, [state.sceneId, sceneId, sequence]);
+  const entryId = randomUUID();
+  await client.query(`INSERT INTO scene_entries (id,project_id,scene_id,entry_type,event_text,event_type,sort_order,world_sequence,actor_type,event_kind,payload)
+    VALUES ($1,$2,$3,'event',$4,$5,0,$6,'DIRECTOR','SCENE_TRANSITION',$7)`, [entryId, projectId, sceneId, plan.text, plan.eventType || '시간 전환', sequence, JSON.stringify({ text: plan.text, eventType: plan.eventType || '시간 전환', transition: true })]);
+  await client.query(`INSERT INTO scene_entry_recipients(entry_id,character_id)
+    SELECT $1,character_id FROM scene_participants WHERE scene_id=$2 AND left_sequence IS NULL`, [entryId, sceneId]);
+  await client.query('UPDATE projects SET scene_number=$2,location=$3,mood=$4,description=$5,public_direction=$6,private_director_state=$7,scene_time=$8,updated_at=NOW() WHERE id=$1', [projectId, nextSceneNumber, plan.location || state.world.location, plan.mood || state.world.mood, description, '새 Scene의 사건에 자연스럽게 반응하세요.', `Director 장면 전환: ${plan.text}`, sceneTime]);
+  return { entryId, sceneId, sequence };
 }
 
 export async function appendSceneEvent(client, projectId, { text, eventType = '일반', actorType = 'DIRECTOR', recipientIds = null }) {

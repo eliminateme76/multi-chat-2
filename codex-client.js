@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { buildCharacterSuggestionPrompt, buildCharacterTurnPrompt, buildEventSuggestionsPrompt } from './context-builder.js';
+import { buildCharacterSuggestionPrompt, buildCharacterTurnPrompt, buildEventSuggestionsPrompt, buildDirectorEventApplyPrompt, buildDirectorSceneTransitionPrompt } from './context-builder.js';
 import { endStage, failStage, recordStage, setRuntimeResource, startStage } from './runtime-telemetry.js';
 
 const CODEX_MODEL = process.env.CODEX_MODEL || 'gpt-5.6-sol';
@@ -54,6 +54,15 @@ const eventSuggestionsSchema = {
     }
   },
   required: ['suggestions'], additionalProperties: false
+};
+
+const directorEventPlanSchema = {
+  type: 'object',
+  properties: {
+    applyMode: { type: 'string', enum: ['APPEND_EVENT', 'CREATE_SCENE'] }, text: { type: 'string' }, eventType: { type: 'string', enum: ['일상', '관계', '연락', '선택', '발견', '돌발', '시간 전환', '분위기', '일반'] }, time: { type: 'string' },
+    location: { type: 'string' }, mood: { type: 'string' }, description: { type: 'string' }
+  },
+  required: ['applyMode', 'text', 'eventType', 'time', 'location', 'mood', 'description'], additionalProperties: false
 };
 
 let appServer;
@@ -262,6 +271,13 @@ export function generateResponderSelection(prompt, runId) {
   });
 }
 
+export function generateDirectorResponderSelection(prompt, runId, director) {
+  return runCodexStructured({ prompt, outputSchema: responderSchema, label: 'World Director · 응답자 선택', runId,
+    thread: { threadId: director.activeThreadId, model: director.model || CODEX_MODEL, persistent: true },
+    validate: (result) => { if (!Array.isArray(result.responders)) throw new Error('invalid responders'); }
+  });
+}
+
 export function generateCharacterSuggestion(state, runId) {
   const contextStage = startStage(runId, 'context_build');
   const prompt = buildCharacterSuggestionPrompt(state);
@@ -293,5 +309,50 @@ export function generateEventSuggestions(state, runId, desiredTypes = []) {
         if (desiredTypes.length && !desiredTypes.includes(suggestion.category)) throw new Error('suggestion is outside desired event types');
       }
     }
+  });
+}
+
+export function generateDirectorEventSuggestions(state, runId, desiredTypes, director) {
+  const contextStage = startStage(runId, 'context_build');
+  const prompt = buildEventSuggestionsPrompt(state, desiredTypes, { director: true });
+  endStage(runId, contextStage, { promptChars: prompt.length, publicLogs: Math.min(30, state.logs.length), director: true });
+  return runCodexStructured({
+    prompt, outputSchema: eventSuggestionsSchema, label: 'World Director · 사건 추천', runId,
+    thread: { threadId: director.activeThreadId, model: director.model || CODEX_MODEL, persistent: true },
+    validate: (result) => {
+      if (!Array.isArray(result.suggestions) || result.suggestions.length !== 10) throw new Error('invalid suggestions');
+      for (const suggestion of result.suggestions) {
+        for (const field of ['category', 'text', 'time']) if (typeof suggestion[field] !== 'string') throw new Error(`missing suggestion ${field}`);
+        suggestion.category = suggestion.category.trim(); suggestion.text = suggestion.text.trim(); suggestion.time = suggestion.time.trim();
+        if (!suggestion.category || !suggestion.text) throw new Error('empty event suggestion');
+        if (suggestion.category === '시간 전환' && !suggestion.time) throw new Error('time transition is missing time');
+        if (desiredTypes.length && !desiredTypes.includes(suggestion.category)) throw new Error('suggestion is outside desired event types');
+      }
+    }
+  });
+}
+
+function validateDirectorEventPlan(result, { requireScene = false } = {}) {
+  for (const field of ['text', 'eventType', 'time', 'location', 'mood', 'description']) {
+    if (typeof result[field] !== 'string') throw new Error(`invalid ${field}`);
+    result[field] = result[field].trim();
+  }
+  if (!result.text) throw new Error('empty event plan');
+  if (requireScene && result.applyMode !== 'CREATE_SCENE') throw new Error('Director did not create scene transition');
+}
+
+export function generateDirectorEventApplication(state, event, runId, director) {
+  const prompt = buildDirectorEventApplyPrompt(state, event);
+  return runCodexStructured({ prompt, outputSchema: directorEventPlanSchema, label: 'World Director · 사건 적용', runId,
+    thread: { threadId: director.activeThreadId, model: director.model || CODEX_MODEL, persistent: true },
+    validate: (result) => validateDirectorEventPlan(result, { requireScene: event.forceScene })
+  });
+}
+
+export function generateDirectorSceneTransition(state, runId, director) {
+  const prompt = buildDirectorSceneTransitionPrompt(state);
+  return runCodexStructured({ prompt, outputSchema: directorEventPlanSchema, label: 'World Director · 장면 전환', runId,
+    thread: { threadId: director.activeThreadId, model: director.model || CODEX_MODEL, persistent: true },
+    validate: (result) => validateDirectorEventPlan(result, { requireScene: true })
   });
 }

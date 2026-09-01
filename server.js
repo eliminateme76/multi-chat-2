@@ -4,10 +4,11 @@ import pg from 'pg';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { generateCharacterSuggestion, generateCodexTurn, generateEventSuggestions } from './codex-client.js';
-import { appendSceneEvent, buildTurnContext, createSceneFromEvent, getActiveParticipants, getStoryState, persistGeneratedTurn } from './story-engine.js';
+import { generateCharacterSuggestion, generateCodexTurn } from './codex-client.js';
+import { appendSceneEvent, buildTurnContext, getActiveParticipants, getStoryState, persistGeneratedTurn } from './story-engine.js';
 import { endStage, failRun, failStage, finishRun, snapshot, startRun, startStage, subscribe } from './runtime-telemetry.js';
 import { enqueueProgression, getOperation, resumeQueuedOperations } from './progression-runner.js';
+import { applyDirectorEvent, createDirectorSuggestions, listEventSuggestions } from './director-engine.js';
 
 if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required. Copy .env.example to .env.');
 const { Pool } = pg;
@@ -71,7 +72,7 @@ app.get('/api/participants', async (req, res, next) => {
 app.get('/api/runtime/threads', async (req, res, next) => {
   try {
     const projectId = projectIdFrom(req);
-    const result = await pool.query(`SELECT c.id AS "characterId",c.name,c.active_thread_id AS "threadId",
+    const result = await pool.query(`SELECT 'character' AS kind,c.id AS "characterId",c.name,c.active_thread_id AS "threadId",
       COALESCE(c.model_override,p.default_model) AS model,c.updated_at AS "updatedAt",
       s.id AS "operationStepId",s.status AS "operationStepStatus",o.id AS "operationId"
       FROM characters c
@@ -79,7 +80,10 @@ app.get('/api/runtime/threads', async (req, res, next) => {
       LEFT JOIN world_operation_steps s ON s.id=c.pending_operation_step_id
       LEFT JOIN world_operations o ON o.id=s.operation_id
       WHERE c.project_id=$1 AND c.active_thread_id IS NOT NULL
-      ORDER BY CASE WHEN s.status='RUNNING' THEN 0 ELSE 1 END,c.sort_order`, [projectId]);
+      UNION ALL
+      SELECT 'director' AS kind,NULL AS "characterId",'월드 디렉터' AS name,p.active_director_thread_id AS "threadId",
+        p.default_model AS model,p.updated_at AS "updatedAt",NULL AS "operationStepId",NULL AS "operationStepStatus",NULL AS "operationId"
+      FROM projects p WHERE p.id=$1 AND p.active_director_thread_id IS NOT NULL`, [projectId]);
     res.json({ threads: result.rows.map((thread) => ({ ...thread, status: thread.operationStepStatus === 'RUNNING' ? 'running' : 'idle' })) });
   } catch (error) { next(error); }
 });
@@ -127,13 +131,15 @@ app.post('/api/events/suggest', async (req, res, next) => {
   try {
     const projectId = projectIdFrom(req);
     runId = startRun({ type: 'event_suggestions', projectId });
-    const state = await getStoryState(pool, projectId);
-    if (!state) { const error = new Error('Project not found.'); failRun(runId, error); return res.status(404).json({ error: error.message }); }
     const desiredTypes = Array.isArray(req.body.desiredTypes) ? req.body.desiredTypes.filter((type) => EVENT_TYPES.has(type) && type !== '일반') : [];
-    const result = await generateEventSuggestions(state, runId, desiredTypes);
+    const result = await createDirectorSuggestions(pool, projectId, desiredTypes, runId);
     finishRun(runId, { count: result.suggestions.length });
     res.json(result);
   } catch (error) { failRun(runId, error); next(error); }
+});
+
+app.get('/api/events/suggestions', async (req, res, next) => {
+  try { res.json({ suggestions: await listEventSuggestions(pool, projectIdFrom(req)) }); } catch (error) { next(error); }
 });
 
 app.put('/api/characters/:id', async (req, res, next) => {
@@ -146,15 +152,28 @@ app.put('/api/characters/:id', async (req, res, next) => {
 });
 
 app.post('/api/events', async (req, res, next) => {
-  const client = await pool.connect();
+  let runId;
   try {
     const projectId = projectIdFrom(req); const text = required(req.body.text, 'text');
     const eventType = EVENT_TYPES.has(req.body.eventType) ? req.body.eventType : '일반';
-    await client.query('BEGIN');
-    await appendSceneEvent(client, projectId, { text, eventType, actorType: 'DIRECTOR' });
-    await client.query('COMMIT');
-    res.json(await getStoryState(client, projectId));
-  } catch (error) { await client.query('ROLLBACK'); next(error); } finally { client.release(); }
+    const time = optionalText(req.body.time);
+    if (eventType === '시간 전환' && !time) throw new Error('시간 전환에는 전환 후 시간이 필요합니다.');
+    runId = startRun({ type: 'director_event', projectId });
+    const result = await applyDirectorEvent(pool, projectId, { text, eventType, time }, runId);
+    finishRun(runId, { eventType, sceneCreated: Boolean(result.outcome.sceneId) });
+    res.json(result.state);
+  } catch (error) { failRun(runId, error); next(error); }
+});
+
+app.post('/api/events/suggestions/:id/apply', async (req, res, next) => {
+  let runId;
+  try {
+    const projectId = projectIdFrom(req);
+    runId = startRun({ type: 'director_event', projectId, metadata: { suggestionId: req.params.id } });
+    const result = await applyDirectorEvent(pool, projectId, {}, runId, req.params.id);
+    finishRun(runId, { suggestionId: req.params.id, sceneCreated: Boolean(result.outcome.sceneId) });
+    res.json(result.state);
+  } catch (error) { failRun(runId, error); next(error); }
 });
 
 app.post('/api/messages', async (req, res, next) => {

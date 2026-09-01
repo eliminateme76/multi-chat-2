@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { buildResponderSelectionPrompt } from './context-builder.js';
-import { generateCodexTurn, generateResponderSelection } from './codex-client.js';
-import { buildCharacterContext, getActiveParticipants, getStoryState, nextEntryOrder, persistGeneratedTurn } from './story-engine.js';
+import { generateCodexTurn, generateDirectorResponderSelection } from './codex-client.js';
+import { buildCharacterContext, getActiveParticipants, getDirectorContext, getStoryState, persistGeneratedTurn, updateDirectorThread } from './story-engine.js';
 import { failRun, finishRun, startRun } from './runtime-telemetry.js';
+import { transitionCompletedScene } from './director-engine.js';
 
 const activeProjects = new Set();
 const minResponders = (mode) => mode === 'chat' ? 2 : 1;
@@ -52,7 +53,9 @@ async function runProgression(pool, projectId, operationId) {
       const requested = operation.payload.mode === 'MANUAL' ? operation.payload.responderIds : null;
       let responderIds = requested;
       if (!responderIds?.length) {
-        const selection = await generateResponderSelection(buildResponderSelectionPrompt({ state, participants, minimum }), runId);
+        const director = await getDirectorContext(client, projectId);
+        const selection = await generateDirectorResponderSelection(buildResponderSelectionPrompt({ state, participants, minimum }), runId, director);
+        await updateDirectorThread(client, projectId, selection.threadId);
         responderIds = selection.responders.map((item) => item.characterId);
       }
       responderIds = [...new Set(responderIds)].filter((id) => participants.some((candidate) => candidate.id === id));
@@ -60,6 +63,7 @@ async function runProgression(pool, projectId, operationId) {
       for (const [index, characterId] of responderIds.entries()) await client.query(`INSERT INTO world_operation_steps(operation_id,step_order,character_id) VALUES ($1,$2,$3)`, [operationId, index, characterId]);
       steps = (await client.query(`SELECT id,character_id AS "characterId",step_order AS "stepOrder",status FROM world_operation_steps WHERE operation_id=$1 ORDER BY step_order`, [operationId])).rows;
     }
+    let sceneCompleted = false;
     for (const step of steps) {
       if (step.status === 'COMPLETED') continue;
       await client.query('BEGIN');
@@ -72,9 +76,12 @@ async function runProgression(pool, projectId, operationId) {
       const outcome = await persistGeneratedTurn(client, context, turn);
       await client.query(`UPDATE world_operation_steps SET status='COMPLETED',thread_id=$2,entry_id=$3,completed_at=NOW() WHERE id=$1`, [step.id, turn.threadId, outcome.entryId]);
       await client.query('COMMIT');
+      sceneCompleted ||= turn.sceneSignal === 'complete';
     }
-    await client.query(`UPDATE world_operations SET status='COMPLETED',completed_at=NOW(),result=$2 WHERE id=$1`, [operationId, JSON.stringify({ completed: true })]);
-    finishRun(runId, { operationId });
+    if (sceneCompleted) await client.query("UPDATE scenes SET progress_signal='complete',updated_at=NOW() WHERE project_id=$1 AND status='active'", [projectId]);
+    const transition = await transitionCompletedScene(client, projectId, runId);
+    await client.query(`UPDATE world_operations SET status='COMPLETED',completed_at=NOW(),result=$2 WHERE id=$1`, [operationId, JSON.stringify({ completed: true, transition })]);
+    finishRun(runId, { operationId, sceneTransitioned: Boolean(transition) });
   } catch (error) {
     try { await client.query('ROLLBACK'); } catch {}
     await client.query(`UPDATE world_operations SET status='FAILED',completed_at=NOW(),error=$2 WHERE id=$1`, [operationId, error.message]);

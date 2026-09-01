@@ -9,6 +9,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Gowun+Dodum&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./turn-cards.css" />
     <link rel="stylesheet" href="./project-switcher.css" />
   </head>
   <body>
@@ -67,6 +68,7 @@
             <div class="event-direction"><span>자동 사건 방향</span><div id="event-type-filters" class="event-type-filters"></div></div>
             <form id="event-form" class="event-form">
               <label class="sr-only" for="event-type-select">사건 타입</label><select id="event-type-select"><option>일상</option><option>관계</option><option>연락</option><option>선택</option><option>발견</option><option>돌발</option><option>시간 전환</option><option>분위기</option><option>일반</option></select>
+              <label class="sr-only" for="event-time-input">전환 후 시간</label><input id="event-time-input" class="event-time-input" maxlength="40" placeholder="전환 후 시간" hidden />
               <label class="sr-only" for="event-input">새로운 사건</label><input id="event-input" maxlength="180" placeholder="예: 정체불명의 편지가 창문을 깨고 날아든다." />
               <button class="event-submit" type="submit">사건 투입 <span>→</span></button>
             </form>

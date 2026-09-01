@@ -61,11 +61,15 @@ function render() {
   $('#relationship-list').innerHTML = state.relationships.map((r) => `<div class="relationship"><div class="relationship-top"><strong>${esc(characterById(r.from)?.name)} ↔ ${esc(characterById(r.to)?.name)}</strong><span>${r.score}</span></div><span>${esc(r.label)}</span><div class="meter"><i style="width:${r.score}%"></i></div></div>`).join(''); renderSuggestions();
 }
 function renderSuggestions() {
+  const current = eventSuggestions.filter((suggestion) => !suggestion.stale);
+  const previous = eventSuggestions.filter((suggestion) => suggestion.stale);
+  const cards = (suggestions) => suggestions.map((suggestion) => `<button class="suggestion ${suggestion.stale ? 'stale' : ''}" data-suggestion-id="${esc(suggestion.id)}"><b>[${esc(suggestion.category)}${suggestion.time ? ` · ${esc(suggestion.time)}` : ''}]</b>${esc(suggestion.text)}</button>`).join('');
   $('#suggestion-list').innerHTML = eventSuggestions.length
-    ? eventSuggestions.map((suggestion, index) => `<button class="suggestion" data-suggestion-index="${index}"><b>[${esc(suggestion.category)}${suggestion.time ? ` · ${esc(suggestion.time)}` : ''}]</b>${esc(suggestion.text)}</button>`).join('')
+    ? `${current.length ? `<div class="suggestion-group"><span>현재 장면 추천</span>${cards(current)}</div>` : ''}${previous.length ? `<div class="suggestion-group previous"><span>이전 장면 추천 · 현재 문맥으로 재검토</span>${cards(previous)}</div>` : ''}`
     : '<span class="suggestion-empty">AI 전개 추천을 누르면 현재 대화에 맞는 사건 10개를 제안합니다.</span>';
-  document.querySelectorAll('[data-suggestion-index]').forEach((button) => { button.onclick = () => { const suggestion = eventSuggestions[Number(button.dataset.suggestionIndex)]; addEvent(suggestion.text, suggestion.time, { eventType: suggestion.category }); }; });
+  document.querySelectorAll('[data-suggestion-id]').forEach((button) => { button.onclick = () => applySuggestion(button.dataset.suggestionId); });
 }
+function renderEventTimeInput() { const input = $('#event-time-input'); const isTransition = $('#event-type-select').value === '시간 전환'; input.hidden = !isTransition; input.required = isTransition; if (!isTransition) input.value = ''; }
 function renderEventTypeFilters() {
   $('#event-type-filters').innerHTML = EVENT_TYPES.map((type) => `<label class="event-type-chip"><input type="checkbox" value="${esc(type)}" ${selectedAutoEventTypes.has(type) ? 'checked' : ''}><span>${esc(type)}</span></label>`).join('');
   $('#event-type-filters').querySelectorAll('input').forEach((input) => { input.onchange = () => { if (input.checked) selectedAutoEventTypes.add(input.value); else selectedAutoEventTypes.delete(input.value); if (!selectedAutoEventTypes.size) { input.checked = true; selectedAutoEventTypes.add(input.value); } }; });
@@ -132,17 +136,20 @@ async function advanceTurn() {
     }
   }
 }
-async function addEvent(text, time = '', { automatic = false, eventType = '일반' } = {}) { if (!text.trim()) return false; try { setState(await api('/api/events', { method: 'POST', body: JSON.stringify({ text, time, eventType }) })); setToolsOpen(false); turnsSinceAutoEvent = 0; if (turnInFlight) pendingEventTurn = true; else await advanceTurn(); return true; } catch (error) { if (automatic) throw error; alert(error.message); return false; } }
+async function refreshEventSuggestions() { eventSuggestions = (await api('/api/events/suggestions')).suggestions; renderSuggestions(); }
+async function addEvent(text, time = '', { automatic = false, eventType = '일반' } = {}) { if (!text.trim()) return false; try { setState(await api('/api/events', { method: 'POST', body: JSON.stringify({ text, time, eventType }) })); await refreshEventSuggestions(); setToolsOpen(false); turnsSinceAutoEvent = 0; if (turnInFlight) pendingEventTurn = true; else await advanceTurn(); return true; } catch (error) { if (automatic) throw error; alert(error.message); return false; } }
+async function applySuggestion(suggestionId, { automatic = false } = {}) { try { setState(await api(`/api/events/suggestions/${suggestionId}/apply`, { method: 'POST', body: JSON.stringify({}) })); await refreshEventSuggestions(); setToolsOpen(false); turnsSinceAutoEvent = 0; if (turnInFlight) pendingEventTurn = true; else await advanceTurn(); return true; } catch (error) { if (automatic) throw error; alert(error.message); return false; } }
 async function maybeInjectAutomaticEvent() {
   if (!autoEventEnabled || autoEventInFlight || turnsSinceAutoEvent < AUTO_EVENT_TURN_INTERVAL) return;
   autoEventInFlight = true; $('#save-status').textContent = '자동 사건 생성 중…'; renderTurnControls();
   try {
     const desiredTypes = [...selectedAutoEventTypes];
-    const suggestions = (await api('/api/events/suggest', { method: 'POST', body: JSON.stringify({ desiredTypes }) })).suggestions;
+    const response = await api('/api/events/suggest', { method: 'POST', body: JSON.stringify({ desiredTypes }) });
+    const suggestions = response.generatedSuggestions || response.suggestions;
     const eligible = suggestions.filter((suggestion) => selectedAutoEventTypes.has(suggestion.category));
     if (!eligible.length) throw new Error('선택한 방향에 맞는 사건이 생성되지 않았습니다.');
     const suggestion = eligible[Math.floor(Math.random() * eligible.length)];
-    await addEvent(suggestion.text, suggestion.time, { automatic: true, eventType: suggestion.category });
+    await applySuggestion(suggestion.id, { automatic: true });
     $('#save-status').textContent = `자동 사건 투입됨 · ${suggestion.category}`;
   } catch (error) {
     autoEventEnabled = false;
@@ -163,7 +170,8 @@ $('#open-world-modal-from-scene').onclick = openWorldModal;
 $('#open-tools-button').onclick = () => setToolsOpen(true);
 $('#tools-scrim').onclick = () => setToolsOpen(false);
 document.querySelectorAll('[data-director-tab]').forEach((button) => { button.onclick = () => setDirectorTab(button.dataset.directorTab); });
-$('#event-form').onsubmit = (event) => { event.preventDefault(); addEvent($('#event-input').value, '', { eventType: $('#event-type-select').value }); $('#event-input').value = ''; };
+$('#event-form').onsubmit = (event) => { event.preventDefault(); const time = $('#event-time-input').value; addEvent($('#event-input').value, time, { eventType: $('#event-type-select').value }); $('#event-input').value = ''; $('#event-time-input').value = ''; };
+$('#event-type-select').onchange = renderEventTimeInput;
 $('#suggest-button').onclick = async () => {
   const button = $('#suggest-button');
   button.disabled = true; button.textContent = '✦ 사건 생성 중…';
@@ -200,6 +208,7 @@ async function selectProject(projectId) {
   window.history.replaceState({}, '', url);
   $('#save-status').textContent = '세계관 불러오는 중…';
   setState(await api('/api/state'));
+  await refreshEventSuggestions();
 }
 async function initialize() {
   try {
@@ -216,3 +225,4 @@ async function initialize() {
 }
 initialize();
 renderEventTypeFilters();
+renderEventTimeInput();

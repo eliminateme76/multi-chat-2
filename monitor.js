@@ -41,7 +41,9 @@ function render() {
 }
 
 function allTrackedThreads() {
-  return [...threads, ...observedThreads()];
+  const tracked = new Map(threads.map((thread) => [thread.threadId, thread]));
+  for (const observed of observedThreads()) tracked.set(observed.threadId, { ...tracked.get(observed.threadId), ...observed });
+  return [...tracked.values()];
 }
 
 function renderActiveThread() {
@@ -99,7 +101,7 @@ function renderHistory() {
 
 function renderThreads() {
   const transientThreads = observedThreads();
-  const allThreads = [...threads, ...transientThreads];
+  const allThreads = allTrackedThreads();
   const running = allThreads.filter((thread) => thread.status === 'running').length;
   $('#thread-count').textContent = `${allThreads.length}개${running ? ` · ${running} 실행 중` : ''}`;
   const renderItem = (thread) => {
@@ -108,17 +110,17 @@ function renderThreads() {
     const statusClass = thread.status === 'idle' ? 'completed' : thread.status;
     return `<div class="thread-item ${thread.status}"><div><strong>${esc(thread.name)}</strong><span class="status-${statusClass}">${status}</span></div><code title="${esc(thread.threadId)}">${esc(compactId)}</code><small>${esc(thread.detail || thread.model || '기본 모델')}</small></div>`;
   };
-  const persistent = threads.length ? `<div class="thread-section">영속 캐릭터 스레드</div>${threads.map(renderItem).join('')}` : '';
-  const transient = transientThreads.length ? `<div class="thread-section">최근 일회성 호출 · 서버 재시작 전 기록</div>${transientThreads.map(renderItem).join('')}` : '';
-  $('#thread-list').innerHTML = persistent || transient || '<div class="empty">아직 관측된 Codex 스레드가 없습니다.</div>';
+  const persistent = threads.length ? `<div class="thread-section">영속 스레드 · 캐릭터 / 월드 디렉터</div>${allThreads.filter((thread) => threads.some((persistentThread) => persistentThread.threadId === thread.threadId)).map(renderItem).join('')}` : '';
+  const transient = transientThreads.filter((thread) => !threads.some((persistentThread) => persistentThread.threadId === thread.threadId));
+  const observed = transient.length ? `<div class="thread-section">최근 일회성 호출 · 서버 재시작 전 기록</div>${transient.map(renderItem).join('')}` : '';
+  $('#thread-list').innerHTML = persistent || observed || '<div class="empty">아직 관측된 Codex 스레드가 없습니다.</div>';
 }
 
 function observedThreads() {
-  const persistentIds = new Set(threads.map((thread) => thread.threadId));
   const observed = new Map();
   for (const run of selectedRuns()) {
     for (const stage of run.stages || []) {
-      if (!['thread_start', 'thread_resume'].includes(stage.name) || !stage.metadata?.threadId || persistentIds.has(stage.metadata.threadId)) continue;
+      if (!['thread_start', 'thread_resume'].includes(stage.name) || !stage.metadata?.threadId) continue;
       if (observed.has(stage.metadata.threadId)) continue;
       observed.set(stage.metadata.threadId, {
         threadId: stage.metadata.threadId,
@@ -160,10 +162,10 @@ function renderTraceChart(runs) {
   const yFor = (duration) => 12 + (1 - duration / maximum) * plotHeight;
   const points = runs.map((run, index) => `${xFor(index)},${yFor(durations[index])}`).join(' ');
   const area = `${left},${height - bottom} ${points} ${width - 12},${height - bottom}`;
-  const typeClass = (type) => ({ progression: 'progression', character_suggestion: 'character-suggestion', event_suggestions: 'event-suggestions', turn: 'turn' })[type] || 'other';
+  const typeClass = (type) => ({ progression: 'progression', character_suggestion: 'character-suggestion', event_suggestions: 'event-suggestions', director_event: 'director-event', turn: 'turn' })[type] || 'other';
   const labels = runs.map((run, index) => index % Math.max(1, Math.ceil(runs.length / 7)) === 0 ? `<text x="${xFor(index)}" y="${height - 5}" text-anchor="middle">${new Date(run.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</text>` : '').join('');
   const dots = runs.map((run, index) => `<circle class="${typeClass(run.type)} ${run.status}" cx="${xFor(index)}" cy="${yFor(durations[index])}" r="4"><title>${esc(`${new Date(run.startedAt).toLocaleTimeString()} · ${runLabel(run.type)} · ${ms(durations[index])} · ${statusText(run.status)}`)}</title></circle>`).join('');
-  chart.innerHTML = `<div class="trace-chart-legend"><span class="progression">월드 진행</span><span class="character-suggestion">캐릭터 추천</span><span class="event-suggestions">사건 추천</span><span class="turn">단일 턴</span></div><svg width="${width}" viewBox="0 0 ${width} ${height}" role="img" aria-label="실행별 총 소요시간 추세"><line x1="${left}" y1="12" x2="${width - 12}" y2="12"></line><line x1="${left}" y1="${height - bottom}" x2="${width - 12}" y2="${height - bottom}"></line><text x="2" y="17">${ms(maximum)}</text><text x="9" y="${height - bottom}">0</text><polygon points="${area}"></polygon><polyline points="${points}"></polyline>${dots}${labels}</svg>`;
+  chart.innerHTML = `<div class="trace-chart-legend"><span class="progression">월드 진행</span><span class="character-suggestion">캐릭터 추천</span><span class="event-suggestions">사건 추천</span><span class="director-event">사건 적용</span><span class="turn">단일 턴</span></div><svg width="${width}" viewBox="0 0 ${width} ${height}" role="img" aria-label="실행별 총 소요시간 추세"><line x1="${left}" y1="12" x2="${width - 12}" y2="12"></line><line x1="${left}" y1="${height - bottom}" x2="${width - 12}" y2="${height - bottom}"></line><text x="2" y="17">${ms(maximum)}</text><text x="9" y="${height - bottom}">0</text><polygon points="${area}"></polygon><polyline points="${points}"></polyline>${dots}${labels}</svg>`;
 }
 
 async function refreshThreads() {
@@ -174,7 +176,7 @@ async function refreshThreads() {
 }
 
 function labelFor(name) { return stages.find(([key]) => key === name)?.[2] || name; }
-function runLabel(type) { return ({ turn: '단일 턴 생성', progression: '월드 진행', character_suggestion: '캐릭터 추천', event_suggestions: '사건 추천' })[type] || type; }
+function runLabel(type) { return ({ turn: '단일 턴 생성', progression: '월드 진행', character_suggestion: '캐릭터 추천', event_suggestions: '사건 추천', director_event: '디렉터 사건 적용' })[type] || type; }
 function statusText(status) { return ({ running: '실행 중', completed: '완료', failed: '실패', queued: '대기 중', idle: '대기' })[status] || status; }
 
 async function initialize() {
