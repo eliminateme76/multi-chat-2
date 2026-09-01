@@ -68,6 +68,22 @@ app.get('/api/participants', async (req, res, next) => {
   try { res.json({ participants: await getActiveParticipants(pool, projectIdFrom(req)) }); } catch (error) { next(error); }
 });
 
+app.get('/api/runtime/threads', async (req, res, next) => {
+  try {
+    const projectId = projectIdFrom(req);
+    const result = await pool.query(`SELECT c.id AS "characterId",c.name,c.active_thread_id AS "threadId",
+      COALESCE(c.model_override,p.default_model) AS model,c.updated_at AS "updatedAt",
+      s.id AS "operationStepId",s.status AS "operationStepStatus",o.id AS "operationId"
+      FROM characters c
+      JOIN projects p ON p.id=c.project_id
+      LEFT JOIN world_operation_steps s ON s.id=c.pending_operation_step_id
+      LEFT JOIN world_operations o ON o.id=s.operation_id
+      WHERE c.project_id=$1 AND c.active_thread_id IS NOT NULL
+      ORDER BY CASE WHEN s.status='RUNNING' THEN 0 ELSE 1 END,c.sort_order`, [projectId]);
+    res.json({ threads: result.rows.map((thread) => ({ ...thread, status: thread.operationStepStatus === 'RUNNING' ? 'running' : 'idle' })) });
+  } catch (error) { next(error); }
+});
+
 app.put('/api/world', async (req, res, next) => {
   const client = await pool.connect();
   try {

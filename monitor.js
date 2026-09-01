@@ -3,8 +3,10 @@ const stages = [
   ['context_build', 'CONTEXT', '프롬프트 조립'], ['queue_wait', 'QUEUE', '요청 대기'], ['app_server_ready', 'APP SERVER', '프로세스 준비'],
   ['thread_start', 'THREAD', 'Thread 생성'], ['model_generate', 'MODEL', '응답 생성'], ['output_validate', 'VALIDATOR', '출력 검증'], ['db_transaction', 'DATABASE', '상태 저장']
 ];
+const WATERFALL_SCALE_MS = 60_000;
 let runtime = { resources: {}, runs: [] };
 let projects = [];
+let threads = [];
 let projectId = new URLSearchParams(location.search).get('project');
 let selectedRunId;
 let selectedStageName;
@@ -33,7 +35,7 @@ function render() {
   $('#app-server-state').textContent = appServer.status || 'idle';
   $('#app-server-state').className = appServer.status === 'ready' ? 'status-completed' : appServer.status === 'stopped' ? 'status-failed' : 'status-running';
   $('#app-server-detail').textContent = appServer.pid ? `PID ${appServer.pid}` : '';
-  renderPipeline(run); renderWaterfall(run, bottleneck); renderHistory();
+  renderPipeline(run); renderWaterfall(run, bottleneck); renderHistory(); renderThreads();
   showNode(selectedStageName || runningStage?.name || bottleneck?.name, run);
 }
 
@@ -56,14 +58,34 @@ function showNode(name, run) {
 
 function renderWaterfall(run, bottleneck) {
   if (!run?.stages.length) { $('#waterfall').innerHTML = '<div class="empty">아직 실행 기록이 없습니다.</div>'; return; }
-  const total = Math.max(1, run.durationMs || Date.now() - Date.parse(run.startedAt));
-  $('#waterfall').innerHTML = run.stages.map((stage) => `<div class="waterfall-row ${stage.status} ${stage.id === bottleneck?.id ? 'bottleneck' : ''}"><span>${esc(labelFor(stage.name))}</span><div class="waterfall-track"><div class="waterfall-bar" style="width:${Math.max(0.5, ((stage.durationMs || 0) / total) * 100)}%"></div></div><em>${ms(stage.durationMs ?? Date.now() - Date.parse(stage.startedAt))}</em></div>`).join('');
+  $('#waterfall').innerHTML = run.stages.map((stage) => {
+    const stageDuration = stage.durationMs ?? Date.now() - Date.parse(stage.startedAt);
+    const width = Math.min(100, Math.max(0.5, (stageDuration / WATERFALL_SCALE_MS) * 100));
+    return `<div class="waterfall-row ${stage.status} ${stage.id === bottleneck?.id ? 'bottleneck' : ''}"><span>${esc(labelFor(stage.name))}</span><div class="waterfall-track" title="고정 60초 기준"><div class="waterfall-bar" style="width:${width}%"></div></div><em>${ms(stageDuration)}</em></div>`;
+  }).join('');
 }
 
 function renderHistory() {
   const runs = selectedRuns().slice(0, 20);
   $('#run-history').innerHTML = runs.length ? runs.map((run) => `<div class="history-item ${run.id === currentRun()?.id ? 'selected' : ''}" data-run="${run.id}"><div><strong>${run.type === 'turn' ? '턴 생성' : '캐릭터 추천'}</strong><span class="status-${run.status}">${statusText(run.status)}</span></div><small>${new Date(run.startedAt).toLocaleTimeString()} · ${ms(run.durationMs)}${run.metadata?.characterName ? ` · ${esc(run.metadata.characterName)}` : ''}</small></div>`).join('') : '<div class="empty">이 세계관의 실행 기록이 없습니다.</div>';
   document.querySelectorAll('[data-run]').forEach((item) => { item.onclick = () => { selectedRunId = item.dataset.run; selectedStageName = null; render(); }; });
+}
+
+function renderThreads() {
+  const running = threads.filter((thread) => thread.status === 'running').length;
+  $('#thread-count').textContent = `${threads.length}개${running ? ` · ${running} 실행 중` : ''}`;
+  $('#thread-list').innerHTML = threads.length ? threads.map((thread) => {
+    const compactId = thread.threadId.length > 22 ? `${thread.threadId.slice(0, 11)}…${thread.threadId.slice(-8)}` : thread.threadId;
+    const status = thread.status === 'running' ? '실행 중' : '대기';
+    return `<div class="thread-item ${thread.status}"><div><strong>${esc(thread.name)}</strong><span class="status-${thread.status === 'running' ? 'running' : 'completed'}">${status}</span></div><code title="${esc(thread.threadId)}">${esc(compactId)}</code><small>${esc(thread.model || '기본 모델')}</small></div>`;
+  }).join('') : '<div class="empty">아직 생성된 캐릭터 스레드가 없습니다.</div>';
+}
+
+async function refreshThreads() {
+  if (!projectId) return;
+  const response = await fetch(`/api/runtime/threads?projectId=${encodeURIComponent(projectId)}`);
+  if (!response.ok) throw new Error('스레드 상태를 불러오지 못했습니다.');
+  threads = (await response.json()).threads;
 }
 
 function labelFor(name) { return stages.find(([key]) => key === name)?.[2] || name; }
@@ -74,8 +96,9 @@ async function initialize() {
   if (!projects.some((project) => project.id === projectId)) projectId = projects[0]?.id;
   $('#monitor-project').innerHTML = projects.map((project) => `<option value="${esc(project.id)}">${esc(project.title)}</option>`).join('');
   $('#monitor-project').value = projectId;
-  $('#monitor-project').onchange = (event) => { projectId = event.target.value; selectedRunId = null; selectedStageName = null; const url = new URL(location.href); url.searchParams.set('project', projectId); history.replaceState({}, '', url); render(); };
+  $('#monitor-project').onchange = async (event) => { projectId = event.target.value; selectedRunId = null; selectedStageName = null; const url = new URL(location.href); url.searchParams.set('project', projectId); history.replaceState({}, '', url); await refreshThreads(); render(); };
   runtime = await (await fetch('/api/runtime/snapshot')).json();
+  await refreshThreads();
   render();
   const events = new EventSource('/api/runtime/events');
   events.addEventListener('snapshot', (event) => { runtime = JSON.parse(event.data); render(); });
@@ -89,5 +112,6 @@ async function initialize() {
   });
   events.onerror = () => { $('#connection-state').textContent = '재연결 중'; $('#connection-state').className = 'status-failed'; };
   setInterval(() => { if (currentRun()?.status === 'running') render(); }, 500);
+  setInterval(() => { refreshThreads().then(render).catch(() => {}); }, 2000);
 }
 initialize().catch((error) => { $('#connection-state').textContent = '연결 실패'; document.body.insertAdjacentHTML('beforeend', `<pre>${esc(error.message)}</pre>`); });

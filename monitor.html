@@ -28,12 +28,16 @@
 
       <section class="lower-grid">
         <article class="waterfall-panel">
-          <div class="panel-title"><div><span>TRACE</span><h2>최근 실행 Waterfall</h2></div></div>
+          <div class="panel-title"><div><span>TRACE</span><h2>최근 실행 Waterfall</h2></div><small>막대: 고정 60초 기준</small></div>
           <div id="waterfall" class="waterfall"></div>
         </article>
         <article class="history-panel">
           <div class="panel-title"><div><span>HISTORY</span><h2>최근 요청</h2></div></div>
           <div id="run-history" class="run-history"></div>
+        </article>
+        <article class="thread-panel">
+          <div class="panel-title"><div><span>CODEX THREADS</span><h2>캐릭터 스레드</h2></div><small id="thread-count">0개</small></div>
+          <div id="thread-list" class="thread-list"></div>
         </article>
       </section>
     </main>
