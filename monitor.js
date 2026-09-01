@@ -35,7 +35,7 @@ function render() {
   $('#app-server-state').textContent = appServer.status || 'idle';
   $('#app-server-state').className = appServer.status === 'ready' ? 'status-completed' : appServer.status === 'stopped' ? 'status-failed' : 'status-running';
   $('#app-server-detail').textContent = appServer.pid ? `PID ${appServer.pid}` : '';
-  renderPipeline(run); renderWaterfall(run, bottleneck); renderHistory(); renderThreads();
+  renderPipeline(run); renderWaterfall(run, bottleneck); renderHistory(); renderThreads(); renderStageMetrics();
   showNode(selectedStageName || runningStage?.name || bottleneck?.name, run);
 }
 
@@ -103,6 +103,24 @@ function observedThreads() {
     }
   }
   return [...observed.values()].slice(0, 20);
+}
+
+function renderStageMetrics() {
+  const aggregates = new Map(stages.map(([name]) => [name, []]));
+  for (const run of selectedRuns()) {
+    for (const stage of run.stages || []) if (stage.durationMs != null && aggregates.has(stage.name)) aggregates.get(stage.name).push(stage.durationMs);
+  }
+  const rows = stages.map(([name, eyebrow, label]) => {
+    const values = aggregates.get(name);
+    if (!values.length) return '';
+    const average = values.reduce((sum, value) => sum + value, 0) / values.length;
+    const maximum = Math.max(...values);
+    const latest = values[0];
+    const averageWidth = Math.min(100, Math.max(0.5, average / WATERFALL_SCALE_MS * 100));
+    const maxPosition = Math.min(100, Math.max(0.5, maximum / WATERFALL_SCALE_MS * 100));
+    return `<div class="stage-metric"><div class="stage-metric-label"><strong>${esc(label)}</strong><span>${esc(eyebrow)} · ${values.length}회</span></div><div class="stage-metric-track" title="평균 ${ms(average)} · 최대 ${ms(maximum)}"><i style="width:${averageWidth}%"></i><b style="left:${maxPosition}%"></b></div><div class="stage-metric-values"><span>평균 ${ms(average)}</span><span>최대 ${ms(maximum)}</span><span>최근 ${ms(latest)}</span></div></div>`;
+  }).filter(Boolean);
+  $('#stage-metrics').innerHTML = rows.length ? rows.join('') : '<div class="empty">완료된 단계가 쌓이면 처리 시간 지표가 표시됩니다.</div>';
 }
 
 async function refreshThreads() {
