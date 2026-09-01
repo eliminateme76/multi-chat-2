@@ -36,6 +36,16 @@ PostgreSQL owns all durable state:
 
 Codex owns no authoritative state. A WorldCharacter stores one active thread id in PostgreSQL. It starts on that character's first response, resumes after app-server reconnects, and is rebuilt from PostgreSQL if unavailable. Suggestion calls remain one-shot and are deleted after completion.
 
+## World templates and playthroughs
+
+Each project is one independent playthrough. `projects.initial_world`, each character's `initial_profile`, and each relationship's initial label/score form its restart template.
+
+- Reset acquires the same project advisory lock used by progression, deletes scenes, entries, memories, suggestions and queued operations, restores initial character/relationship state, clears Codex thread links, and creates an empty Scene 1.
+- Clone creates a new project id and new character ids from the source template. Portraits, model choices and character cards are copied, while messages, memories, operations and thread ids are not.
+- The source playthrough is never modified by cloning.
+
+Reset is deliberately destructive and requires browser confirmation. Clone is the safe choice when the existing progression must remain available.
+
 ## Visibility model
 
 The Context Builder may send a character:

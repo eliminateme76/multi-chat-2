@@ -26,12 +26,17 @@ This file is the current operational handoff between Codex sessions on the home 
 - CHAT settlement pauses character auto-progress rather than creating a scene by itself.
 - Automatic event cadence now counts persisted messages and uses a 12-message interval.
 - Main UI and monitor show each character's `대화 종료` state.
+- The world editor now supports `현재 진행 초기화` and `별도 진행 만들기`.
+- Reset preserves the world/character/initial relationship template but clears scenes, dialogue, events, memories, operations and Codex thread links.
+- Clone creates an independent selectable project from the same initial settings without changing the source progression.
 
 ## Database migration
 
 - New migration: `db/008_conversation_settlement.sql`
 - It adds `idle_at_sequence`, `idle_reason`, and `idle_at` to `scene_participants`.
 - Run `npm run migrate` after pulling this change. It is safe to rerun.
+- New migration: `db/009_project_playthroughs.sql`
+- It adds the initial world snapshot and initial relationship values used by reset/clone.
 
 ## Verification completed
 
@@ -39,6 +44,7 @@ This file is the current operational handoff between Codex sessions on the home 
 - `npm run migrate` completed locally.
 - Automatic time transition was verified to reject before model generation when the conversation is not settled.
 - `npm run verify:api` passed after updating the verifier for queued progression operations and mid-conversation events.
+- Disposable lifecycle verification passed: clone created an empty Scene 1 with all characters, an inserted event was then removed by reset, and the disposable project was deleted.
 
 ## Next checks
 
@@ -46,6 +52,7 @@ This file is the current operational handoff between Codex sessions on the home 
 2. Test an ordinary automatic event during active conversation and confirm all prior end votes reset.
 3. Test automatic `시간 전환` after unanimous settlement and confirm a new scene is created.
 4. Review model pass frequency and adjust the CHAT prompt if characters end too early or keep repeating themselves.
+5. Confirm reset/clone wording and placement on a narrow/mobile viewport.
 
 ## Known limitations
 

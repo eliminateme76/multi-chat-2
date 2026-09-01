@@ -179,6 +179,39 @@ function openCharacterModal(id) { editingId = id || null; const c = id ? charact
 async function saveCharacter() { const form = $('#character-form'); if (!form.reportValidity()) return; try { setState(await api(editingId ? `/api/characters/${editingId}` : '/api/characters', { method: editingId ? 'PUT' : 'POST', body: JSON.stringify(Object.fromEntries(new FormData(form))) })); $('#character-modal').close(); } catch (error) { alert(error.message); } }
 function openWorldModal() { const form = $('#world-form'); Object.entries(state.world).forEach(([key, value]) => { form.elements[key].value = value; }); $('#world-modal').showModal(); }
 async function saveWorld() { const form = $('#world-form'); if (!form.reportValidity()) return; try { setState(await api('/api/world', { method: 'PUT', body: JSON.stringify(Object.fromEntries(new FormData(form))) })); $('#world-modal').close(); } catch (error) { alert(error.message); } }
+async function loadProjectOptions(selectedId = currentProjectId) {
+  const projects = await api('/api/projects');
+  if (!projects.length) throw new Error('등록된 세계관이 없습니다.');
+  $('#project-select').innerHTML = projects.map((project) => `<option value="${esc(project.id)}">${esc(project.title)} · ${esc(project.mood)}</option>`).join('');
+  currentProjectId = projects.some((project) => project.id === selectedId) ? selectedId : projects[0].id;
+  $('#project-select').value = currentProjectId;
+  return projects;
+}
+async function resetCurrentPlaythrough() {
+  if (!confirm(`「${state.world.title}」의 대화, 사건, 기억과 관계 변화를 모두 지우고 처음부터 시작할까요?\n세계관과 초기 캐릭터 설정은 유지됩니다.`)) return;
+  stopAutoProgress();
+  try {
+    $('#save-status').textContent = '현재 진행 초기화 중…';
+    setState(await api('/api/projects/reset', { method: 'POST', body: '{}' }));
+    eventSuggestions = []; turnsSinceAutoEvent = 0; renderSuggestions();
+    $('#world-modal').close();
+  } catch (error) { $('#save-status').textContent = '초기화 실패'; alert(error.message); }
+}
+async function cloneCurrentPlaythrough() {
+  const title = prompt('새 진행의 이름을 입력하세요.', `${state.world.title} · 새 진행`);
+  if (title === null || !title.trim()) return;
+  stopAutoProgress();
+  try {
+    $('#save-status').textContent = '별도 진행 생성 중…';
+    const result = await api('/api/projects/clone', { method: 'POST', body: JSON.stringify({ title: title.trim() }) });
+    currentProjectId = result.projectId;
+    await loadProjectOptions(currentProjectId);
+    setState(result.state);
+    eventSuggestions = []; turnsSinceAutoEvent = 0; renderSuggestions();
+    $('#world-modal').close();
+    const url = new URL(window.location.href); url.searchParams.set('project', currentProjectId); window.history.replaceState({}, '', url);
+  } catch (error) { $('#save-status').textContent = '새 진행 생성 실패'; alert(error.message); }
+}
 
 $('#advance-button').onclick = advanceTurn;
 $('#auto-button').onclick = () => { if (autoEnabled) stopAutoProgress(); else { autoEnabled = true; scheduleAutoTurn(0); } renderTurnControls(); };
@@ -199,6 +232,8 @@ $('#suggest-button').onclick = async () => {
   finally { button.disabled = false; button.textContent = '✦ AI 전개 추천'; }
 };
 $('#character-form').onsubmit = (event) => { event.preventDefault(); saveCharacter(); }; $('#world-form').onsubmit = (event) => { event.preventDefault(); saveWorld(); };
+$('#reset-playthrough-button').onclick = resetCurrentPlaythrough;
+$('#clone-playthrough-button').onclick = cloneCurrentPlaythrough;
 $('#ai-character-button').onclick = async () => {
   const button = $('#ai-character-button');
   const form = $('#character-form');
@@ -230,9 +265,7 @@ async function selectProject(projectId) {
 }
 async function initialize() {
   try {
-    const projects = await api('/api/projects');
-    if (!projects.length) throw new Error('등록된 세계관이 없습니다.');
-    $('#project-select').innerHTML = projects.map((project) => `<option value="${esc(project.id)}">${esc(project.title)} · ${esc(project.mood)}</option>`).join('');
+    const projects = await loadProjectOptions(currentProjectId);
     if (!projects.some((project) => project.id === currentProjectId)) currentProjectId = projects[0].id;
     $('#project-select').onchange = (event) => selectProject(event.target.value).catch((error) => { $('#save-status').textContent = '전환 실패'; alert(error.message); });
     await selectProject(currentProjectId);

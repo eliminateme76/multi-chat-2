@@ -9,6 +9,7 @@ import { appendSceneEvent, buildTurnContext, getActiveParticipants, getStoryStat
 import { endStage, failRun, failStage, finishRun, snapshot, startRun, startStage, subscribe } from './runtime-telemetry.js';
 import { enqueueProgression, getOperation, resumeQueuedOperations } from './progression-runner.js';
 import { applyDirectorEvent, createDirectorSuggestions, listEventSuggestions } from './director-engine.js';
+import { clonePlaythrough, resetPlaythrough } from './project-lifecycle.js';
 
 if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required. Copy .env.example to .env.');
 const { Pool } = pg;
@@ -35,6 +36,21 @@ const projectIdFrom = (req) => {
 
 app.get('/api/projects', async (_req, res, next) => {
   try { res.json((await pool.query('SELECT id,title,mood FROM projects ORDER BY created_at,title')).rows); } catch (error) { next(error); }
+});
+
+app.post('/api/projects/reset', async (req, res, next) => {
+  try {
+    const projectId = projectIdFrom(req);
+    await resetPlaythrough(pool, projectId);
+    res.json(await getStoryState(pool, projectId));
+  } catch (error) { next(error); }
+});
+
+app.post('/api/projects/clone', async (req, res, next) => {
+  try {
+    const projectId = await clonePlaythrough(pool, projectIdFrom(req), optionalText(req.body.title));
+    res.status(201).json({ projectId, state: await getStoryState(pool, projectId) });
+  } catch (error) { next(error); }
 });
 
 app.get('/api/runtime/snapshot', (_req, res) => res.json(snapshot()));
