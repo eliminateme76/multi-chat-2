@@ -23,7 +23,7 @@ function render() {
   $('#connection-state').className = 'status-completed';
   $('#run-status').textContent = run ? statusText(run.status) : '대기 중';
   $('#run-status').className = run ? `status-${run.status}` : '';
-  $('#run-detail').textContent = run ? `${run.type === 'turn' ? '턴 생성' : '캐릭터 추천'}${run.metadata?.characterName ? ` · ${run.metadata.characterName}` : ''}` : '새 요청을 기다리고 있습니다';
+  $('#run-detail').textContent = run ? `${runLabel(run.type)}${run.metadata?.characterName ? ` · ${run.metadata.characterName}` : ''}` : '새 요청을 기다리고 있습니다';
   $('#total-duration').textContent = run ? ms(run.durationMs ?? Date.now() - Date.parse(run.startedAt)) : '—';
   const completedStages = run?.stages.filter((stage) => stage.durationMs != null) || [];
   const bottleneck = completedStages.toSorted((a, b) => b.durationMs - a.durationMs)[0];
@@ -88,7 +88,7 @@ function renderWaterfall(run, bottleneck) {
 
 function renderHistory() {
   const runs = selectedRuns().slice(0, 20);
-  $('#run-history').innerHTML = runs.length ? runs.map((run) => `<div class="history-item ${run.id === currentRun()?.id ? 'selected' : ''}" data-run="${run.id}"><div><strong>${run.type === 'turn' ? '턴 생성' : '캐릭터 추천'}</strong><span class="status-${run.status}">${statusText(run.status)}</span></div><small>${new Date(run.startedAt).toLocaleTimeString()} · ${ms(run.durationMs)}${run.metadata?.characterName ? ` · ${esc(run.metadata.characterName)}` : ''}</small></div>`).join('') : '<div class="empty">이 세계관의 실행 기록이 없습니다.</div>';
+  $('#run-history').innerHTML = runs.length ? runs.map((run) => `<div class="history-item ${run.id === currentRun()?.id ? 'selected' : ''}" data-run="${run.id}"><div><strong>${runLabel(run.type)}</strong><span class="status-${run.status}">${statusText(run.status)}</span></div><small>${new Date(run.startedAt).toLocaleTimeString()} · ${ms(run.durationMs)}${run.metadata?.characterName ? ` · ${esc(run.metadata.characterName)}` : ''}</small></div>`).join('') : '<div class="empty">이 세계관의 실행 기록이 없습니다.</div>';
   document.querySelectorAll('[data-run]').forEach((item) => { item.onclick = () => { selectedRunId = item.dataset.run; selectedStageName = null; render(); }; });
 }
 
@@ -152,6 +152,7 @@ async function refreshThreads() {
 }
 
 function labelFor(name) { return stages.find(([key]) => key === name)?.[2] || name; }
+function runLabel(type) { return ({ turn: '단일 턴 생성', progression: '월드 진행', character_suggestion: '캐릭터 추천', event_suggestions: '사건 추천' })[type] || type; }
 function statusText(status) { return ({ running: '실행 중', completed: '완료', failed: '실패', queued: '대기 중', idle: '대기' })[status] || status; }
 
 async function initialize() {

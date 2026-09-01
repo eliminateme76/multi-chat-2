@@ -257,7 +257,7 @@ export function generateCodexTurn(context) {
 }
 
 export function generateResponderSelection(prompt, runId) {
-  return runCodexStructured({ prompt, outputSchema: responderSchema, label: 'responder selection', runId,
+  return runCodexStructured({ prompt, outputSchema: responderSchema, label: '응답자 선택', runId,
     validate: (result) => { if (!Array.isArray(result.responders)) throw new Error('invalid responders'); }
   });
 }
@@ -267,7 +267,7 @@ export function generateCharacterSuggestion(state, runId) {
   const prompt = buildCharacterSuggestionPrompt(state);
   endStage(runId, contextStage, { promptChars: prompt.length, publicLogs: Math.min(6, state.logs.length), characters: state.characters.length });
   return runCodexStructured({
-    prompt, outputSchema: suggestionSchema, label: 'character suggestion', runId,
+    prompt, outputSchema: suggestionSchema, label: '캐릭터 추천', runId,
     validate: (result) => {
       for (const field of ['name', 'role', 'personality', 'speechStyle', 'goal', 'secret']) {
         if (typeof result[field] !== 'string' || !result[field].trim()) throw new Error(`missing ${field}`);
@@ -282,7 +282,7 @@ export function generateEventSuggestions(state, runId, desiredTypes = []) {
   const prompt = buildEventSuggestionsPrompt(state, desiredTypes);
   endStage(runId, contextStage, { promptChars: prompt.length, publicLogs: Math.min(10, state.logs.length), characters: state.characters.length });
   return runCodexStructured({
-    prompt, outputSchema: eventSuggestionsSchema, label: 'event suggestions', runId,
+    prompt, outputSchema: eventSuggestionsSchema, label: '사건 추천', runId,
     validate: (result) => {
       if (!Array.isArray(result.suggestions) || result.suggestions.length !== 10) throw new Error('invalid suggestions');
       for (const suggestion of result.suggestions) {
