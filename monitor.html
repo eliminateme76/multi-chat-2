@@ -13,12 +13,16 @@
       <select id="monitor-project" aria-label="모니터링할 세계관"></select>
     </header>
     <main>
+      <section id="active-call-banner" class="active-call-banner" data-active="false">
+        <span>ACTIVE NOW</span>
+        <strong id="active-thread-title">대기</strong>
+        <p id="active-thread-detail">실행 중인 Codex 호출이 없습니다</p>
+      </section>
       <section class="summary-grid">
         <article class="primary-status"><span>현재 상태</span><strong id="run-status">대기</strong><small id="run-detail">새 요청을 기다리고 있습니다</small></article>
         <article><span>현재 단계</span><strong id="current-stage">대기</strong><small id="current-stage-time">—</small></article>
         <article><span>병목 구간</span><strong id="bottleneck">—</strong></article>
         <article><span>총 시간 · APP SERVER</span><strong><span id="total-duration">—</span> · <span id="app-server-state">대기</span></strong><small id="app-server-detail"></small></article>
-        <article class="active-thread-status"><span>현재 CODEX 호출</span><strong id="active-thread-title">대기</strong><small id="active-thread-detail">실행 중인 스레드가 없습니다</small></article>
       </section>
 
       <section class="canvas-panel">

@@ -46,18 +46,23 @@ function allTrackedThreads() {
 
 function renderActiveThread() {
   const active = allTrackedThreads().find((thread) => thread.status === 'running');
+  const banner = $('#active-call-banner');
   const title = $('#active-thread-title');
   const detail = $('#active-thread-detail');
   if (!active) {
+    banner.dataset.active = 'false';
     title.textContent = '대기';
     title.className = '';
-    detail.textContent = '실행 중인 스레드가 없습니다';
+    detail.textContent = '실행 중인 Codex 호출이 없습니다';
     return;
   }
+  const stage = selectedRuns().flatMap((run) => run.stages || []).findLast((item) => item.status === 'running' && item.metadata?.threadId === active.threadId);
+  const stageDuration = stage ? ms(Date.now() - Date.parse(stage.startedAt)) : null;
   const compactId = active.threadId.length > 22 ? `${active.threadId.slice(0, 11)}…${active.threadId.slice(-8)}` : active.threadId;
+  banner.dataset.active = 'true';
   title.textContent = active.name;
   title.className = 'status-running';
-  detail.textContent = `${active.detail || active.model || '기본 모델'} · ${compactId}`;
+  detail.textContent = `${stage ? `${labelFor(stage.name)} · ${stageDuration} 진행 중` : 'Codex 호출 진행 중'} · ${active.detail || active.model || '기본 모델'} · ${compactId}`;
 }
 
 function renderPipeline(run) {
