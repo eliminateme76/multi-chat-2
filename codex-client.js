@@ -121,40 +121,40 @@ class PersistentAppServer {
     }
   }
 
-  async ensureThread(existingThreadId, model, runId) {
+  async ensureThread(existingThreadId, model, runId, usage) {
     await this.ready;
     if (existingThreadId && this.loadedThreads.has(existingThreadId)) return { threadId: existingThreadId, reused: true };
-    const stage = startStage(runId, existingThreadId ? 'thread_resume' : 'thread_start');
+    const stage = startStage(runId, existingThreadId ? 'thread_resume' : 'thread_start', { usage });
     try {
       if (existingThreadId) {
         await this.request('thread/resume', { threadId: existingThreadId });
         this.loadedThreads.add(existingThreadId);
-        endStage(runId, stage, { threadId: existingThreadId, model });
+        endStage(runId, stage, { threadId: existingThreadId, model, usage });
         return { threadId: existingThreadId, reused: true };
       }
       const started = await this.request('thread/start', { model, cwd: process.cwd(), approvalPolicy: 'never', sandbox: 'read-only', serviceName: 'sceneweaver' });
       const threadId = started?.thread?.id;
       if (!threadId) throw new Error('Codex app-server did not return a thread id.');
       this.loadedThreads.add(threadId);
-      endStage(runId, stage, { threadId, model });
+      endStage(runId, stage, { threadId, model, usage });
       return { threadId, reused: false };
     } catch (error) {
       failStage(runId, stage, error);
-      if (existingThreadId) return this.ensureThread(null, model, runId);
+      if (existingThreadId) return this.ensureThread(null, model, runId, usage);
       throw error;
     }
   }
 
-  async runTurn(prompt, outputSchema, runId, { threadId: existingThreadId = null, model = CODEX_MODEL, persistent = false } = {}) {
-    const ensured = await this.ensureThread(existingThreadId, model, runId);
+  async runTurn(prompt, outputSchema, runId, { threadId: existingThreadId = null, model = CODEX_MODEL, persistent = false, usage = 'Codex 호출' } = {}) {
+    const ensured = await this.ensureThread(existingThreadId, model, runId, usage);
     const threadId = ensured.threadId;
     if (!threadId) throw new Error('Codex app-server did not return a thread id.');
-    const modelStage = startStage(runId, 'model_generate', { threadId });
+    const modelStage = startStage(runId, 'model_generate', { threadId, usage });
     const completion = new Promise((resolve, reject) => { this.activeTurn = { resolve, reject }; });
     try {
       await this.request('turn/start', { threadId, model, cwd: process.cwd(), approvalPolicy: 'never', sandbox: 'read-only', input: [{ type: 'text', text: prompt }], outputSchema });
       const turn = await completion;
-      endStage(runId, modelStage, { outputItems: turn?.items?.length || 0 });
+      endStage(runId, modelStage, { outputItems: turn?.items?.length || 0, usage });
       return { turn, threadId, reused: ensured.reused };
     } catch (error) {
       if (this.activeTurn) this.activeTurn = null;
@@ -202,7 +202,7 @@ async function executeStructured({ prompt, outputSchema, validate, label, runId,
     await client.ready;
     endStage(runId, appServerStage, { reused, pid: client.child.pid });
     const turn = await Promise.race([
-      client.runTurn(prompt, outputSchema, runId, thread),
+      client.runTurn(prompt, outputSchema, runId, { ...thread, usage: label }),
       new Promise((_, reject) => { timer = setTimeout(() => { const error = new Error(`Codex ${label} timed out after ${TIMEOUT_MS / 1000} seconds.`); client.destroy(error); reject(error); }, TIMEOUT_MS); })
     ]);
     if (turn?.turn?.status !== 'completed') throw new Error(`Codex ${label} failed: ${turn?.turn?.error?.message || turn?.turn?.status || 'unknown error'}`);
@@ -240,7 +240,7 @@ export function generateCodexTurn(context) {
   const prompt = buildCharacterTurnPrompt(context);
   endStage(context.runId, contextStage, { promptChars: prompt.length, publicLogs: Math.min(6, context.state.logs.length), privateMemories: context.memories.length });
   return runCodexStructured({
-    prompt, outputSchema: turnSchema, label: 'turn', runId: context.runId,
+    prompt, outputSchema: turnSchema, label: `캐릭터 응답 · ${context.character.name}`, runId: context.runId,
     thread: { threadId: context.character.activeThreadId, model: context.character.effectiveModel || CODEX_MODEL, persistent: true },
     validate: (result) => {
       if (typeof result.emotion !== 'string' || !result.emotion.trim()) throw new Error('missing emotion');

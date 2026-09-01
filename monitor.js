@@ -72,13 +72,37 @@ function renderHistory() {
 }
 
 function renderThreads() {
-  const running = threads.filter((thread) => thread.status === 'running').length;
-  $('#thread-count').textContent = `${threads.length}개${running ? ` · ${running} 실행 중` : ''}`;
-  $('#thread-list').innerHTML = threads.length ? threads.map((thread) => {
+  const transientThreads = observedThreads();
+  const allThreads = [...threads, ...transientThreads];
+  const running = allThreads.filter((thread) => thread.status === 'running').length;
+  $('#thread-count').textContent = `${allThreads.length}개${running ? ` · ${running} 실행 중` : ''}`;
+  const renderItem = (thread) => {
     const compactId = thread.threadId.length > 22 ? `${thread.threadId.slice(0, 11)}…${thread.threadId.slice(-8)}` : thread.threadId;
-    const status = thread.status === 'running' ? '실행 중' : '대기';
-    return `<div class="thread-item ${thread.status}"><div><strong>${esc(thread.name)}</strong><span class="status-${thread.status === 'running' ? 'running' : 'completed'}">${status}</span></div><code title="${esc(thread.threadId)}">${esc(compactId)}</code><small>${esc(thread.model || '기본 모델')}</small></div>`;
-  }).join('') : '<div class="empty">아직 생성된 캐릭터 스레드가 없습니다.</div>';
+    const status = ({ running: '실행 중', idle: '대기', completed: '일회성 완료', failed: '실패' })[thread.status] || '대기';
+    const statusClass = thread.status === 'idle' ? 'completed' : thread.status;
+    return `<div class="thread-item ${thread.status}"><div><strong>${esc(thread.name)}</strong><span class="status-${statusClass}">${status}</span></div><code title="${esc(thread.threadId)}">${esc(compactId)}</code><small>${esc(thread.detail || thread.model || '기본 모델')}</small></div>`;
+  };
+  const persistent = threads.length ? `<div class="thread-section">영속 캐릭터 스레드</div>${threads.map(renderItem).join('')}` : '';
+  const transient = transientThreads.length ? `<div class="thread-section">최근 일회성 호출 · 서버 재시작 전 기록</div>${transientThreads.map(renderItem).join('')}` : '';
+  $('#thread-list').innerHTML = persistent || transient || '<div class="empty">아직 관측된 Codex 스레드가 없습니다.</div>';
+}
+
+function observedThreads() {
+  const persistentIds = new Set(threads.map((thread) => thread.threadId));
+  const observed = new Map();
+  for (const run of selectedRuns()) {
+    for (const stage of run.stages || []) {
+      if (!['thread_start', 'thread_resume'].includes(stage.name) || !stage.metadata?.threadId || persistentIds.has(stage.metadata.threadId)) continue;
+      if (observed.has(stage.metadata.threadId)) continue;
+      observed.set(stage.metadata.threadId, {
+        threadId: stage.metadata.threadId,
+        name: stage.metadata.usage || 'Codex 호출',
+        detail: `${stage.name === 'thread_resume' ? '기존 스레드 재개' : '새 스레드'} · ${stage.metadata.model || '기본 모델'}`,
+        status: run.status === 'running' ? 'running' : run.status === 'failed' ? 'failed' : 'completed'
+      });
+    }
+  }
+  return [...observed.values()].slice(0, 20);
 }
 
 async function refreshThreads() {
