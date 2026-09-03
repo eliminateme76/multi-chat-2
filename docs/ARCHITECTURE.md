@@ -33,8 +33,9 @@ PostgreSQL owns all durable state:
 - `scene_entry_recipients`: immutable per-event visibility snapshots
 - `world_operations`: durable infrastructure queue, not story-domain session state
 - `character_memories`: private observations available only to their owner
+- `world_creation_drafts` and `world_creation_messages`: resumable pre-project World Builder conversations and their latest structured draft
 
-Codex owns no authoritative state. A WorldCharacter stores one active thread id in PostgreSQL. It starts on that character's first response, resumes after app-server reconnects, and is rebuilt from PostgreSQL if unavailable. Suggestion calls remain one-shot and are deleted after completion.
+Codex owns no authoritative state. A WorldCharacter stores one active thread id in PostgreSQL. It starts on that character's first response, resumes after app-server reconnects, and is rebuilt from PostgreSQL if unavailable. Character suggestion calls remain one-shot, while event suggestions share the World Director thread. A World Builder draft has a separate reusable thread while it is active, with PostgreSQL messages and `draft_data` available to rebuild that context if the thread is unavailable.
 
 ## Model and reasoning configuration
 
@@ -64,6 +65,14 @@ Each project is one independent playthrough. `projects.initial_world`, each char
 - Reset acquires the same project advisory lock used by progression, deletes scenes, entries, memories, suggestions and queued operations, restores initial character/relationship state, clears Codex thread links, and creates an empty Scene 1.
 - Clone creates a new project id and new character ids from the source template. Portraits, model choices and character cards are copied, while messages, memories, operations and thread ids are not.
 - The source playthrough is never modified by cloning.
+
+## Conversational world creation
+
+The World Builder exists before a new project and never writes directly into an active story. A browser starts an `ACTIVE` draft using the selected project's utility model and reasoning settings, then sends one user message at a time through a draft-scoped reusable Codex thread. Every successful response contains a user-facing reply and a complete structured draft for the world, first Scene, two to six characters, and meaningful initial relationships.
+
+PostgreSQL remains authoritative during this workflow: successful user/assistant messages, the latest validated draft, and the thread link are persisted together. Manual preview edits pass through the same validator. Draft save, model generation, cancellation, and final creation share a draft-scoped advisory lock so concurrent browser requests cannot overwrite each other.
+
+Final creation is explicit and transactional. It inserts a new project and `initial_world`, new character ids and `initial_profile` values, symmetric initial relationships, Scene 1, and its participants. Builder dialogue does not enter Scene history or character memory. After commit, the draft is marked `CREATED` and its Codex thread is cleaned up on a best-effort basis.
 
 Reset is deliberately destructive and requires browser confirmation. Clone is the safe choice when the existing progression must remain available.
 

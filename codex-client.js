@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { buildCharacterSuggestionPrompt, buildCharacterTurnPrompt, buildEventSuggestionsPrompt, buildDirectorEventApplyPrompt, buildDirectorSceneTransitionPrompt } from './context-builder.js';
+import { buildCharacterSuggestionPrompt, buildCharacterTurnPrompt, buildEventSuggestionsPrompt, buildDirectorEventApplyPrompt, buildDirectorSceneTransitionPrompt, buildWorldDraftPrompt } from './context-builder.js';
 import { endStage, failStage, recordStage, setRuntimeResource, startStage, updateRunMetadata } from './runtime-telemetry.js';
 
 const CODEX_MODEL = process.env.CODEX_MODEL || 'gpt-5.6-sol';
@@ -64,6 +64,42 @@ const directorEventPlanSchema = {
     location: { type: 'string' }, mood: { type: 'string' }, description: { type: 'string' }
   },
   required: ['applyMode', 'text', 'eventType', 'time', 'location', 'mood', 'description'], additionalProperties: false
+};
+
+const worldDraftSchema = {
+  type: 'object',
+  properties: {
+    reply: { type: 'string' },
+    missingItems: { type: 'array', maxItems: 6, items: { type: 'string' } },
+    draft: {
+      type: 'object',
+      properties: {
+        world: {
+          type: 'object', properties: {
+            title: { type: 'string' }, location: { type: 'string' }, mood: { type: 'string' }, time: { type: 'string' },
+            description: { type: 'string' }, rules: { type: 'string' }, presentationMode: { type: 'string', enum: ['scene', 'chat'] }
+          }, required: ['title','location','mood','time','description','rules','presentationMode'], additionalProperties: false
+        },
+        characters: {
+          type: 'array', minItems: 2, maxItems: 6, items: {
+            type: 'object', properties: {
+              key: { type: 'string' }, name: { type: 'string' }, gender: { type: 'string', enum: ['여성','남성','논바이너리','성별 없음'] },
+              role: { type: 'string' }, emoji: { type: 'string' }, color: { type: 'string' }, personality: { type: 'string' },
+              speechStyle: { type: 'string' }, goal: { type: 'string' }, secret: { type: 'string' }, emotion: { type: 'string' }
+            }, required: ['key','name','gender','role','emoji','color','personality','speechStyle','goal','secret','emotion'], additionalProperties: false
+          }
+        },
+        relationships: {
+          type: 'array', maxItems: 15, items: {
+            type: 'object', properties: {
+              characterKeys: { type: 'array', minItems: 2, maxItems: 2, items: { type: 'string' } },
+              label: { type: 'string' }, score: { type: 'integer', minimum: 0, maximum: 100 }
+            }, required: ['characterKeys','label','score'], additionalProperties: false
+          }
+        }
+      }, required: ['world','characters','relationships'], additionalProperties: false
+    }
+  }, required: ['reply','missingItems','draft'], additionalProperties: false
 };
 
 let appServer;
@@ -182,6 +218,7 @@ class PersistentAppServer {
       if (this.closed) break;
       try { await this.request(method, { threadId }); } catch (error) { failures.push(`${method}: ${error.message}`); }
     }
+    this.loadedThreads.delete(threadId);
     if (failures.length) console.warn(`Codex thread cleanup incomplete (${threadId}): ${failures.join('; ')}`);
   }
 
@@ -215,6 +252,11 @@ export async function listCodexModels() {
     defaultEffort: item.defaultReasoningEffort,
     efforts: (item.supportedReasoningEfforts || []).map((option) => option.reasoningEffort)
   }));
+}
+
+export async function cleanupCodexThread(threadId) {
+  if (!threadId || !appServer || appServer.closed) return;
+  await appServer.cleanupThread(threadId);
 }
 
 async function executeStructured({ prompt, outputSchema, validate, label, runId, thread }) {
@@ -380,5 +422,22 @@ export function generateDirectorSceneTransition(state, runId, director) {
   return runCodexStructured({ prompt, outputSchema: directorEventPlanSchema, label: 'World Director · 장면 전환', runId,
     thread: { threadId: director.activeThreadId, model: director.model || CODEX_MODEL, effort: director.reasoningEffort || 'high', persistent: true },
     validate: (result) => validateDirectorEventPlan(result, { requireScene: true })
+  });
+}
+
+export function generateWorldDraft(context) {
+  updateRunMetadata(context.runId, { activeAgentType: 'world_builder', activeAgentName: '월드 설계자', activePhase: '월드 초안 설계', activeThreadId: context.threadId || null, activeModel: context.model || CODEX_MODEL, activeEffort: context.reasoningEffort || 'medium' });
+  const stage = startStage(context.runId, 'context_build');
+  const prompt = buildWorldDraftPrompt(context);
+  endStage(context.runId, stage, { promptChars: prompt.length, messages: context.messages.length, characters: context.draft.characters?.length || 0 });
+  return runCodexStructured({
+    prompt, outputSchema: worldDraftSchema, label: '월드 설계자 · 초안 갱신', runId: context.runId,
+    thread: { threadId: context.threadId, model: context.model || CODEX_MODEL, effort: context.reasoningEffort || 'medium', persistent: true },
+    validate: (result) => {
+      if (typeof result.reply !== 'string' || !result.reply.trim()) throw new Error('missing world builder reply');
+      result.reply = result.reply.trim();
+      if (result.reply.length > 1000) throw new Error('world builder reply is too long');
+      if (!Array.isArray(result.missingItems) || !result.draft || typeof result.draft !== 'object') throw new Error('invalid world draft');
+    }
   });
 }

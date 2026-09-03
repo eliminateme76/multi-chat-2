@@ -61,7 +61,7 @@ function renderActiveThread() {
     if (run?.metadata?.activeAgentName) {
       const runningStage = run.stages?.findLast((stage) => stage.status === 'running');
       banner.dataset.active = 'true';
-      title.textContent = run.metadata.activeAgentType === 'director' ? '월드 디렉터' : `캐릭터 · ${run.metadata.activeAgentName}`;
+      title.textContent = run.metadata.activeAgentType === 'director' ? '월드 디렉터' : run.metadata.activeAgentType === 'world_builder' ? '월드 설계자' : `캐릭터 · ${run.metadata.activeAgentName}`;
       title.className = 'status-running';
       detail.textContent = `${run.metadata.activePhase || '분석 중'} · ${runningStage ? `${labelFor(runningStage.name)} ${ms(Date.now() - Date.parse(runningStage.startedAt))}` : '호출 준비 중'}${run.metadata.activeModel ? ` · ${run.metadata.activeModel}${run.metadata.activeEffort ? ` · ${run.metadata.activeEffort}` : ''}` : ''}${run.metadata.activeThreadId ? ` · ${run.metadata.activeThreadId}` : ''}`;
       return;
@@ -76,7 +76,7 @@ function renderActiveThread() {
   const stageDuration = stage ? ms(Date.now() - Date.parse(stage.startedAt)) : null;
   const compactId = active.threadId.length > 22 ? `${active.threadId.slice(0, 11)}…${active.threadId.slice(-8)}` : active.threadId;
   banner.dataset.active = 'true';
-  title.textContent = active.kind === 'director' ? '월드 디렉터' : `캐릭터 · ${active.name.replace(/^캐릭터 응답 · /, '')}`;
+  title.textContent = active.kind === 'director' ? '월드 디렉터' : active.kind === 'world_builder' ? '월드 설계자' : `캐릭터 · ${active.name.replace(/^캐릭터 응답 · /, '')}`;
   title.className = 'status-running';
   detail.textContent = `${stage ? `${labelFor(stage.name)} · ${stageDuration} 진행 중` : 'Codex 호출 진행 중'} · ${active.detail || active.model || '기본 모델'}${active.effort ? ` · ${active.effort}` : ''} · ${compactId}`;
 }
@@ -122,12 +122,12 @@ function renderThreads() {
     const compactId = thread.threadId.length > 22 ? `${thread.threadId.slice(0, 11)}…${thread.threadId.slice(-8)}` : thread.threadId;
     const status = thread.conversationIdle ? '대화 종료' : ({ running: '실행 중', idle: '대기', completed: '일회성 완료', failed: '실패' })[thread.status] || '대기';
     const statusClass = thread.status === 'idle' ? 'completed' : thread.status;
-    const owner = thread.kind === 'director' ? '월드 디렉터' : thread.kind === 'character' ? `캐릭터 · ${thread.name}` : thread.name;
+    const owner = thread.kind === 'director' ? '월드 디렉터' : thread.kind === 'world_builder' ? '월드 설계자' : thread.kind === 'character' ? `캐릭터 · ${thread.name}` : thread.name;
     const runtime = `${thread.detail || thread.model || '기본 모델'}${thread.effort ? ` · ${thread.effort}` : ''}`;
     const detail = thread.kind === 'character' ? `캐릭터 스레드 · ${runtime}${thread.conversationIdle && thread.idleReason ? ` · ${thread.idleReason}` : ''}` : runtime;
     return `<div class="thread-item ${thread.status}"><div><strong>${esc(owner)}</strong><span class="status-${statusClass}">${status}</span></div><code title="${esc(thread.threadId)}">${esc(compactId)}</code><small>${esc(detail)}</small></div>`;
   };
-  const persistent = threads.length ? `<div class="thread-section">영속 스레드 · 캐릭터 / 월드 디렉터</div>${allThreads.filter((thread) => threads.some((persistentThread) => persistentThread.threadId === thread.threadId)).map(renderItem).join('')}` : '';
+  const persistent = threads.length ? `<div class="thread-section">영속 스레드 · 캐릭터 / 디렉터 / 월드 설계자</div>${allThreads.filter((thread) => threads.some((persistentThread) => persistentThread.threadId === thread.threadId)).map(renderItem).join('')}` : '';
   const transient = transientThreads.filter((thread) => !threads.some((persistentThread) => persistentThread.threadId === thread.threadId));
   const observed = transient.length ? `<div class="thread-section">최근 일회성 호출 · 서버 재시작 전 기록</div>${transient.map(renderItem).join('')}` : '';
   $('#thread-list').innerHTML = persistent || observed || '<div class="empty">아직 관측된 Codex 스레드가 없습니다.</div>';
@@ -141,7 +141,7 @@ function observedThreads() {
       if (observed.has(stage.metadata.threadId)) continue;
       observed.set(stage.metadata.threadId, {
         threadId: stage.metadata.threadId,
-        kind: stage.metadata.usage?.startsWith('캐릭터 응답 · ') ? 'character' : stage.metadata.usage?.includes('디렉터') ? 'director' : 'transient',
+        kind: stage.metadata.usage?.startsWith('캐릭터 응답 · ') ? 'character' : stage.metadata.usage?.includes('월드 설계자') ? 'world_builder' : stage.metadata.usage?.includes('디렉터') ? 'director' : 'transient',
         name: stage.metadata.usage?.replace(/^캐릭터 응답 · /, '') || 'Codex 호출',
         detail: `${stage.name === 'thread_resume' ? '기존 스레드 재개' : '새 스레드'} · ${stage.metadata.model || '기본 모델'}`,
         status: run.status === 'running' ? 'running' : run.status === 'failed' ? 'failed' : 'completed'
@@ -199,7 +199,7 @@ async function refreshThreads() {
 }
 
 function labelFor(name) { return stages.find(([key]) => key === name)?.[2] || name; }
-function runLabel(type) { return ({ turn: '단일 턴 생성', progression: '월드 진행', character_suggestion: '캐릭터 추천', event_suggestions: '사건 추천', director_event: '디렉터 사건 적용' })[type] || type; }
+function runLabel(type) { return ({ turn: '단일 턴 생성', progression: '월드 진행', character_suggestion: '캐릭터 추천', event_suggestions: '사건 추천', director_event: '디렉터 사건 적용', world_draft: '월드 초안 설계', world_create: '새 월드 생성' })[type] || type; }
 function statusText(status) { return ({ running: '실행 중', completed: '완료', failed: '실패', queued: '대기 중', idle: '대기' })[status] || status; }
 
 async function initialize() {

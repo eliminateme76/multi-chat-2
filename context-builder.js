@@ -171,3 +171,29 @@ ${directorStateText(state)}
 4. time, location, mood, description은 새 Scene 상태로 작성하세요.
 5. 캐릭터 대사나 메타 설명 없이 JSON schema만 반환하세요.`;
 }
+
+export function buildWorldDraftPrompt({ draft, messages, userMessage }) {
+  const history = messages.slice(-12).map((message) => `${message.role === 'USER' ? '사용자' : '월드 설계자'}: ${message.content}`).join('\n');
+  return `당신은 Sceneweaver의 한국어 월드 설계자입니다. 사용자와 여러 번 대화하며 즉시 플레이할 수 있는 새 월드 초안을 다듬으세요.
+
+현재 DB 초안:
+${JSON.stringify(draft)}
+
+최근 대화:
+${history || '아직 대화가 없습니다.'}
+
+새 사용자 요청:
+${userMessage}
+
+규칙:
+1. reply에는 변경한 내용과 다음에 선택하면 좋은 핵심 질문을 한국어로 자연스럽게 답하세요. 질문은 한 번에 최대 2개입니다.
+2. 정보가 부족해도 합리적인 기본값으로 완전한 draft를 작성하고 missingItems에 더 확인하면 좋은 항목을 기록하세요.
+3. 이전 초안과 사용자의 명시적 선택을 유지하고, 이번 요청과 충돌하는 부분만 수정하세요.
+4. 캐릭터는 2~6명이며 수를 지정하지 않으면 3명입니다. 이름과 key는 서로 달라야 하고 key는 영문 소문자로 시작하세요.
+5. 관계는 서로 다른 두 캐릭터의 key를 한 쌍으로 표현하세요. 모든 조합을 억지로 채우지 말고 이야기상 의미 있는 관계만 작성하세요.
+6. 세계 이름 50자, 장소·분위기 70자, 시간 40자, 장면 설명·규칙 300자, 캐릭터 이름 20자, 역할 40자, 나머지 캐릭터 설명 120자를 넘기지 마세요.
+7. color는 #RRGGBB, presentationMode는 scene 또는 chat, 성별은 여성/남성/논바이너리/성별 없음 중 하나입니다.
+8. 첫 Scene은 캐릭터들이 즉시 말하거나 행동할 수 있는 구체적인 상황이어야 합니다.
+9. 사용자가 비밀을 요구하지 않아도 각 캐릭터의 행동 동기가 될 비공개 secret을 작성하세요.
+10. 지정된 JSON schema만 출력하세요.`;
+}

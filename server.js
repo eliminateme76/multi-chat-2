@@ -10,6 +10,7 @@ import { endStage, failRun, failStage, finishRun, snapshot, startRun, startStage
 import { enqueueProgression, getOperation, resumeQueuedOperations } from './progression-runner.js';
 import { applyDirectorEvent, createDirectorSuggestions, listEventSuggestions } from './director-engine.js';
 import { clonePlaythrough, resetPlaythrough } from './project-lifecycle.js';
+import { cancelWorldDraft, converseWorldDraft, createWorldFromDraft, getWorldDraft, listWorldDrafts, saveWorldDraft, startWorldDraft } from './world-builder.js';
 
 if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required. Copy .env.example to .env.');
 const { Pool } = pg;
@@ -78,6 +79,52 @@ app.post('/api/projects/clone', async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+app.get('/api/world-drafts', async (_req, res, next) => {
+  try { res.json({ drafts: await listWorldDrafts(pool) }); } catch (error) { next(error); }
+});
+
+app.post('/api/world-drafts', async (req, res, next) => {
+  try { res.status(201).json(await startWorldDraft(pool, projectIdFrom(req))); } catch (error) { next(error); }
+});
+
+app.get('/api/world-drafts/:id', async (req, res, next) => {
+  try {
+    const draft = await getWorldDraft(pool, req.params.id);
+    if (!draft) return res.status(404).json({ error: '월드 초안을 찾을 수 없습니다.' });
+    res.json(draft);
+  } catch (error) { next(error); }
+});
+
+app.post('/api/world-drafts/:id/messages', async (req, res, next) => {
+  let runId;
+  try {
+    const projectId = projectIdFrom(req);
+    runId = startRun({ type: 'world_draft', projectId, metadata: { draftId: req.params.id } });
+    const draft = await converseWorldDraft(pool, req.params.id, req.body.message, runId);
+    finishRun(runId, { draftId: req.params.id, activeThreadId: draft.threadId });
+    res.json(draft);
+  } catch (error) { failRun(runId, error); next(error); }
+});
+
+app.put('/api/world-drafts/:id', async (req, res, next) => {
+  try { res.json(await saveWorldDraft(pool, req.params.id, req.body.draft)); } catch (error) { next(error); }
+});
+
+app.post('/api/world-drafts/:id/create', async (req, res, next) => {
+  let runId;
+  try {
+    const sourceProjectId = projectIdFrom(req);
+    runId = startRun({ type: 'world_create', projectId: sourceProjectId, metadata: { draftId: req.params.id } });
+    const projectId = await createWorldFromDraft(pool, req.params.id);
+    finishRun(runId, { draftId: req.params.id, createdProjectId: projectId });
+    res.status(201).json({ projectId, state: await getStoryState(pool, projectId) });
+  } catch (error) { failRun(runId, error); next(error); }
+});
+
+app.post('/api/world-drafts/:id/cancel', async (req, res, next) => {
+  try { await cancelWorldDraft(pool, req.params.id); res.json({ cancelled: true }); } catch (error) { next(error); }
+});
+
 app.get('/api/runtime/snapshot', (_req, res) => res.json(snapshot()));
 app.get('/api/runtime/events', (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
@@ -130,7 +177,12 @@ app.get('/api/runtime/threads', async (req, res, next) => {
       SELECT 'director' AS kind,NULL AS "characterId",'월드 디렉터' AS name,p.active_director_thread_id AS "threadId",
         COALESCE(p.director_model,p.default_model) AS model,p.director_reasoning_effort AS effort,p.updated_at AS "updatedAt",NULL AS "operationStepId",NULL AS "operationStepStatus",NULL AS "operationId",
         NULL::bigint AS "idleAtSequence",NULL::text AS "idleReason",FALSE AS "conversationIdle"
-      FROM projects p WHERE p.id=$1 AND p.active_director_thread_id IS NOT NULL`, [projectId]);
+      FROM projects p WHERE p.id=$1 AND p.active_director_thread_id IS NOT NULL
+      UNION ALL
+      SELECT 'world_builder' AS kind,NULL AS "characterId",'월드 설계자' AS name,d.thread_id AS "threadId",
+        d.model,d.reasoning_effort AS effort,d.updated_at AS "updatedAt",NULL AS "operationStepId",NULL AS "operationStepStatus",NULL AS "operationId",
+        NULL::bigint AS "idleAtSequence",NULL::text AS "idleReason",FALSE AS "conversationIdle"
+      FROM world_creation_drafts d WHERE d.source_project_id=$1 AND d.status='ACTIVE' AND d.thread_id IS NOT NULL`, [projectId]);
     res.json({ threads: result.rows.map((thread) => ({ ...thread, status: thread.operationStepStatus === 'RUNNING' ? 'running' : 'idle' })) });
   } catch (error) { next(error); }
 });

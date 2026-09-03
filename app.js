@@ -16,6 +16,10 @@ const EVENT_TYPES = ['일상', '관계', '연락', '선택', '발견', '돌발',
 let selectedAutoEventTypes = new Set(EVENT_TYPES);
 let currentProjectId = new URLSearchParams(window.location.search).get('project');
 let modelCatalog = [];
+let worldDrafts = [];
+let activeWorldDraft = null;
+let worldDraftBusy = false;
+let worldDraftDirty = false;
 const ALL_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
 const $ = (selector) => document.querySelector(selector);
 const esc = (text) => String(text).replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
@@ -213,6 +217,130 @@ async function saveCharacter() { const form = $('#character-form'); if (!form.re
 function openWorldModal() { const form = $('#world-form'); Object.entries(state.world).forEach(([key, value]) => { form.elements[key].value = value; }); wireRuntimeSelects(form, { characterModel: state.aiSettings.character.model, characterEffort: state.aiSettings.character.reasoningEffort, directorModel: state.aiSettings.director.model, directorEffort: state.aiSettings.director.reasoningEffort, utilityModel: state.aiSettings.utility.model, utilityEffort: state.aiSettings.utility.reasoningEffort }); $('#world-modal').showModal(); }
 async function saveWorld() { const form = $('#world-form'); if (!form.reportValidity()) return; try { setState(await api('/api/world', { method: 'PUT', body: JSON.stringify(Object.fromEntries(new FormData(form))) })); $('#world-modal').close(); } catch (error) { alert(error.message); } }
 async function saveAiSettings() { const form = $('#world-form'); const data = Object.fromEntries(new FormData(form)); try { setState(await api('/api/ai-settings', { method: 'PUT', body: JSON.stringify(data) })); $('#save-status').textContent = 'AI 실행 설정 저장됨'; } catch (error) { alert(error.message); } }
+
+function setWorldDraftBusy(busy, message = '') {
+  worldDraftBusy = busy;
+  $('#world-builder-card')?.setAttribute('data-busy', String(busy));
+  const send = $('#world-builder-send');
+  send.disabled = busy;
+  send.textContent = busy ? '월드 설계자가 생각 중…' : '설계자에게 보내기';
+  $('#create-world-from-draft').disabled = busy || !activeWorldDraft?.draft?.characters?.length;
+  if (message) $('#world-draft-save-state').textContent = message;
+}
+
+function renderWorldDraftList() {
+  const select = $('#world-draft-select');
+  select.innerHTML = worldDrafts.length
+    ? worldDrafts.map((item) => `<option value="${esc(item.id)}">${esc(item.draft?.world?.title || '이름 없는 초안')} · ${new Date(item.updatedAt).toLocaleString()}</option>`).join('')
+    : '<option value="">작성 중인 초안 없음</option>';
+  select.value = activeWorldDraft?.id || '';
+}
+
+function renderWorldDraft() {
+  renderWorldDraftList();
+  const draft = activeWorldDraft?.draft;
+  const messages = activeWorldDraft?.messages || [];
+  $('#world-builder-messages').innerHTML = messages.length
+    ? messages.map((message) => `<article class="world-builder-message ${message.role === 'USER' ? 'user' : 'assistant'}"><small>${message.role === 'USER' ? '나' : '월드 설계자'}</small>${esc(message.content)}</article>`).join('')
+    : '<div class="world-builder-empty"><strong>만들고 싶은 세계를 편하게 이야기해 주세요.</strong><br>장르, 분위기, 등장인물 또는 시작 상황 중 생각난 것만 말해도 나머지는 설계자가 초안으로 채워드립니다.</div>';
+  const log = $('#world-builder-messages'); log.scrollTop = log.scrollHeight;
+  const world = draft?.world || {};
+  $('#world-draft-world').innerHTML = `<label>세계 이름<input name="title" maxlength="50" value="${esc(world.title || '')}"></label><label>진행 방식<select name="presentationMode"><option value="scene" ${world.presentationMode !== 'chat' ? 'selected' : ''}>STORY</option><option value="chat" ${world.presentationMode === 'chat' ? 'selected' : ''}>CHAT</option></select></label><label>첫 장소<input name="location" maxlength="70" value="${esc(world.location || '')}"></label><label>첫 시간<input name="time" maxlength="40" value="${esc(world.time || '')}"></label><label class="full">분위기<input name="mood" maxlength="70" value="${esc(world.mood || '')}"></label><label class="full">첫 장면 설명<textarea name="description" maxlength="300">${esc(world.description || '')}</textarea></label><label class="full">세계 규칙<textarea name="rules" maxlength="300">${esc(world.rules || '')}</textarea></label>`;
+  $('#world-draft-characters').innerHTML = draft?.characters?.length
+    ? draft.characters.map((character, index) => `<article class="world-draft-character" data-draft-character="${index}" data-key="${esc(character.key)}"><label>표식<input data-field="emoji" maxlength="8" value="${esc(character.emoji)}"></label><label>이름<input data-field="name" maxlength="20" value="${esc(character.name)}"></label><label>성별<select data-field="gender">${['여성','남성','논바이너리','성별 없음'].map((gender) => `<option ${character.gender === gender ? 'selected' : ''}>${gender}</option>`).join('')}</select></label><label class="wide">역할<input data-field="role" maxlength="40" value="${esc(character.role)}"></label><label>색상<input data-field="color" maxlength="7" value="${esc(character.color)}"></label><span class="character-key full">KEY · ${esc(character.key)}</span><label class="full">성격<input data-field="personality" maxlength="120" value="${esc(character.personality)}"></label><label class="full">말투<input data-field="speechStyle" maxlength="120" value="${esc(character.speechStyle)}"></label><label class="full">목표<textarea data-field="goal" maxlength="120">${esc(character.goal)}</textarea></label><label class="full">비밀<textarea data-field="secret" maxlength="120">${esc(character.secret)}</textarea></label><label class="full">초기 감정<input data-field="emotion" maxlength="80" value="${esc(character.emotion)}"></label></article>`).join('')
+    : '<div class="world-draft-none">첫 요청을 보내면 캐릭터 초안이 여기에 나타납니다.</div>';
+  const names = new Map((draft?.characters || []).map((character) => [character.key, character.name]));
+  $('#world-draft-relationships').innerHTML = draft?.relationships?.length
+    ? draft.relationships.map((relationship, index) => `<article class="world-draft-relationship" data-draft-relationship="${index}" data-first="${esc(relationship.characterKeys[0])}" data-second="${esc(relationship.characterKeys[1])}"><strong>${esc(names.get(relationship.characterKeys[0]) || relationship.characterKeys[0])} ↔ ${esc(names.get(relationship.characterKeys[1]) || relationship.characterKeys[1])}</strong><label>관계 설명<input data-field="label" maxlength="120" value="${esc(relationship.label)}"></label><label>점수<input data-field="score" type="number" min="0" max="100" value="${relationship.score}"></label></article>`).join('')
+    : '<div class="world-draft-none">설정된 초기 관계가 없습니다.</div>';
+  const missing = draft?.missingItems || [];
+  $('#world-draft-missing').hidden = !missing.length;
+  $('#world-draft-missing').textContent = missing.length ? `더 정하면 좋은 항목 · ${missing.join(' · ')}` : '';
+  $('#world-draft-form').querySelectorAll('input,textarea,select').forEach((input) => { input.oninput = () => { worldDraftDirty = true; $('#world-draft-save-state').textContent = '저장하지 않은 수정 내용'; }; });
+  worldDraftDirty = false;
+  $('#world-draft-save-state').textContent = activeWorldDraft ? `${activeWorldDraft.model} · ${activeWorldDraft.reasoningEffort}` : '초안을 선택하세요';
+  setWorldDraftBusy(worldDraftBusy);
+}
+
+function collectWorldDraft() {
+  const form = $('#world-draft-form');
+  const world = Object.fromEntries(['title','location','mood','time','description','rules','presentationMode'].map((name) => [name, form.elements[name]?.value || '']));
+  const characters = [...form.querySelectorAll('[data-draft-character]')].map((card) => ({
+    key: card.dataset.key,
+    ...Object.fromEntries(['name','gender','role','emoji','color','personality','speechStyle','goal','secret','emotion'].map((field) => [field, card.querySelector(`[data-field="${field}"]`).value]))
+  }));
+  const relationships = [...form.querySelectorAll('[data-draft-relationship]')].map((card) => ({ characterKeys: [card.dataset.first, card.dataset.second], label: card.querySelector('[data-field="label"]').value, score: Number(card.querySelector('[data-field="score"]').value) }));
+  return { world, characters, relationships, missingItems: activeWorldDraft?.draft?.missingItems || [] };
+}
+
+async function loadWorldDrafts(selectedId = activeWorldDraft?.id) {
+  worldDrafts = (await api('/api/world-drafts')).drafts;
+  const selected = worldDrafts.find((item) => item.id === selectedId) || worldDrafts[0];
+  activeWorldDraft = selected ? await api(`/api/world-drafts/${selected.id}`) : null;
+  renderWorldDraft();
+}
+
+async function newWorldDraft() {
+  setWorldDraftBusy(true, '새 초안 만드는 중…');
+  try {
+    activeWorldDraft = await api('/api/world-drafts', { method: 'POST', body: '{}' });
+    await loadWorldDrafts(activeWorldDraft.id);
+  } finally { setWorldDraftBusy(false); }
+}
+
+async function openWorldBuilder() {
+  $('#world-builder-modal').showModal();
+  try { await loadWorldDrafts(); if (!activeWorldDraft) await newWorldDraft(); }
+  catch (error) { alert(`월드 초안을 불러오지 못했습니다.\n${error.message}`); }
+}
+
+async function persistWorldDraft() {
+  if (!activeWorldDraft) return false;
+  setWorldDraftBusy(true, '초안 저장 중…');
+  try {
+    activeWorldDraft = await api(`/api/world-drafts/${activeWorldDraft.id}`, { method: 'PUT', body: JSON.stringify({ draft: collectWorldDraft() }) });
+    worldDrafts = worldDrafts.map((item) => item.id === activeWorldDraft.id ? activeWorldDraft : item);
+    worldDraftDirty = false; renderWorldDraft(); return true;
+  } catch (error) { alert(`초안을 저장하지 못했습니다.\n${error.message}`); return false; }
+  finally { setWorldDraftBusy(false); }
+}
+
+async function sendWorldDraftMessage(event) {
+  event.preventDefault();
+  if (!activeWorldDraft || worldDraftBusy) return;
+  const input = $('#world-builder-input'); const message = input.value.trim();
+  if (!message) return;
+  if (worldDraftDirty && !(await persistWorldDraft())) return;
+  setWorldDraftBusy(true, '월드 설계자가 초안을 다듬는 중…');
+  try {
+    activeWorldDraft = await api(`/api/world-drafts/${activeWorldDraft.id}/messages`, { method: 'POST', body: JSON.stringify({ message }) });
+    input.value = ''; await loadWorldDrafts(activeWorldDraft.id);
+  } catch (error) { alert(`월드 설계자 응답에 실패했습니다.\n${error.message}`); }
+  finally { setWorldDraftBusy(false); }
+}
+
+async function createWorldFromActiveDraft() {
+  if (!activeWorldDraft || worldDraftBusy) return;
+  if (worldDraftDirty && !(await persistWorldDraft())) return;
+  setWorldDraftBusy(true, '새 월드 생성 중…');
+  try {
+    const result = await api(`/api/world-drafts/${activeWorldDraft.id}/create`, { method: 'POST', body: '{}' });
+    stopAutoProgress(); currentProjectId = result.projectId;
+    await loadProjectOptions(currentProjectId); setState(result.state);
+    eventSuggestions = []; turnsSinceAutoEvent = 0; renderSuggestions();
+    const url = new URL(window.location.href); url.searchParams.set('project', currentProjectId); window.history.replaceState({}, '', url);
+    $('#world-builder-modal').close();
+  } catch (error) { alert(`월드를 생성하지 못했습니다.\n${error.message}`); }
+  finally { setWorldDraftBusy(false); }
+}
+
+async function cancelActiveWorldDraft() {
+  if (!activeWorldDraft || worldDraftBusy || !confirm('이 월드 초안과 생성 대화를 취소할까요?')) return;
+  setWorldDraftBusy(true, '초안 취소 중…');
+  try { await api(`/api/world-drafts/${activeWorldDraft.id}/cancel`, { method: 'POST', body: '{}' }); activeWorldDraft = null; await loadWorldDrafts(); if (!activeWorldDraft) await newWorldDraft(); }
+  catch (error) { alert(`초안을 취소하지 못했습니다.\n${error.message}`); }
+  finally { setWorldDraftBusy(false); }
+}
 async function loadProjectOptions(selectedId = currentProjectId) {
   const projects = await api('/api/projects');
   if (!projects.length) throw new Error('등록된 세계관이 없습니다.');
@@ -251,6 +379,7 @@ $('#advance-button').onclick = advanceTurn;
 $('#auto-button').onclick = () => { if (autoEnabled) stopAutoProgress(); else { autoEnabled = true; scheduleAutoTurn(0); } renderTurnControls(); };
 $('#auto-event-button').onclick = () => { autoEventEnabled = !autoEventEnabled; if (!autoEventEnabled) turnsSinceAutoEvent = 0; renderTurnControls(); };
 $('#open-character-modal').onclick = () => openCharacterModal(); $('#open-world-modal').onclick = openWorldModal;
+$('#open-world-builder').onclick = openWorldBuilder;
 $('#open-world-modal-from-scene').onclick = openWorldModal;
 $('#open-tools-button').onclick = () => setToolsOpen(true);
 $('#tools-scrim').onclick = () => setToolsOpen(false);
@@ -269,6 +398,12 @@ $('#character-form').onsubmit = (event) => { event.preventDefault(); saveCharact
 $('#reset-playthrough-button').onclick = resetCurrentPlaythrough;
 $('#clone-playthrough-button').onclick = cloneCurrentPlaythrough;
 $('#save-ai-settings-button').onclick = saveAiSettings;
+$('#world-builder-chat-form').onsubmit = sendWorldDraftMessage;
+$('#new-world-draft').onclick = newWorldDraft;
+$('#save-world-draft').onclick = persistWorldDraft;
+$('#create-world-from-draft').onclick = createWorldFromActiveDraft;
+$('#cancel-world-draft').onclick = cancelActiveWorldDraft;
+$('#world-draft-select').onchange = (event) => loadWorldDrafts(event.target.value).catch((error) => alert(error.message));
 $('#ai-character-button').onclick = async () => {
   const button = $('#ai-character-button');
   const form = $('#character-form');
