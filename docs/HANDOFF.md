@@ -19,6 +19,7 @@ Last updated: 2026-09-03 (Asia/Seoul)
 - Added AI-generated legacy-world repair preview/apply/reject. Event history is never rewritten and apply is sequence-checked and transactional.
 - World Builder drafts capture intensity, premise, core tensions and an opening question; new worlds start with populated story, Scene and character state.
 - The play UI shows compact story tension/objective/active tensions and major-decision cards. The monitor records Director planning/action and tension movement.
+- Moved `현재 설정으로 새 진행` and destructive `현재 진행 처음부터 다시 시작` out of the world editor into the menu beside the current-project selector. `＋ 새 월드` remains a separate creation action.
 
 ## Database migration
 

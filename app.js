@@ -469,7 +469,7 @@ async function resetCurrentPlaythrough() {
     $('#save-status').textContent = '현재 진행 초기화 중…';
     setState(await api('/api/projects/reset', { method: 'POST', body: '{}' }));
     eventSuggestions = []; renderSuggestions();
-    $('#world-modal').close();
+    $('#project-actions').removeAttribute('open');
   } catch (error) { $('#save-status').textContent = '초기화 실패'; alert(error.message); }
 }
 async function cloneCurrentPlaythrough() {
@@ -483,7 +483,7 @@ async function cloneCurrentPlaythrough() {
     await loadProjectOptions(currentProjectId);
     setState(result.state);
     eventSuggestions = []; renderSuggestions();
-    $('#world-modal').close();
+    $('#project-actions').removeAttribute('open');
     const url = new URL(window.location.href); url.searchParams.set('project', currentProjectId); window.history.replaceState({}, '', url);
   } catch (error) { $('#save-status').textContent = '새 진행 생성 실패'; alert(error.message); }
 }
@@ -510,6 +510,7 @@ $('#suggest-button').onclick = async () => {
 $('#character-form').onsubmit = (event) => { event.preventDefault(); saveCharacter(); }; $('#world-form').onsubmit = (event) => { event.preventDefault(); saveWorld(); };
 $('#reset-playthrough-button').onclick = resetCurrentPlaythrough;
 $('#clone-playthrough-button').onclick = cloneCurrentPlaythrough;
+document.addEventListener('click', (event) => { const menu = $('#project-actions'); if (menu.open && !menu.contains(event.target)) menu.removeAttribute('open'); });
 $('#save-ai-settings-button').onclick = saveAiSettings;
 $('#apply-story-repair').onclick = () => decideStoryRepair('apply');
 $('#reject-story-repair').onclick = () => decideStoryRepair('reject');

@@ -47,6 +47,8 @@ Worlds whose `story_state` is empty cannot progress until reviewed. `POST /api/s
 
 World Builder structured drafts include drama intensity, premise, reusable core tensions and an opening question. Creation assigns new world-local character ids and seeds non-empty story, Scene and character state. Builder dialogue never enters story history. Reset restores the initial story template; clone remaps stored character ids and never copies logs, memories or Codex thread ids.
 
+Project lifecycle actions are intentionally separate from world-content editing in the browser. `＋ 새 월드` opens World Builder, while the menu beside the project selector contains clone-as-new-playthrough and destructive reset. The world editor changes only the selected world's content and runtime settings.
+
 ## Visibility and safety
 
 Character prompts include only public world/Scene state, that character's current profile/state/secret, its relevant directed relationships, its private active memories, and Events explicitly visible to it since its cursor. Other characters' secrets, memories and private Director state are excluded. Event cursors advance only after response persistence succeeds.
