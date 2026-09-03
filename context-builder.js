@@ -1,7 +1,8 @@
-function publicLog(log, state) {
+function publicLog(log, state, includeOutcome = false) {
   if (log.type === 'event') return `[공개 사건 · ${log.eventType || '일반'}] ${log.text}`;
   const speaker = state.characters.find((item) => item.id === log.characterId)?.name || '알 수 없는 인물';
-  return `[${speaker}] ${log.text}\n(행동: ${log.action})`;
+  const outcome = includeOutcome && log.payload?.beatOutcome ? `\n(서사 결과: ${log.payload.beatOutcome}${log.payload.conditionOrCost ? ` · 조건/대가: ${log.payload.conditionOrCost}` : ''})` : '';
+  return `[${speaker}] ${log.text}\n(행동: ${log.action})${outcome}`;
 }
 
 export function buildCharacterTurnPrompt({ character, state, memories = [], visibleEvents = [] }) {
@@ -40,6 +41,10 @@ export function buildCharacterTurnPrompt({ character, state, memories = [], visi
 - 공개 진행 지시: ${state.publicDirection || '현재 상황에 자연스럽게 반응하세요.'}
 - 현재 장면 목표: ${state.storyStatus?.objective || '현재 상황을 구체적으로 한 단계 움직입니다.'}
 - 현재 딜레마: ${state.storyStatus?.dilemma || '없음'}
+- 이번 비트 의도: ${state.dramaticState?.beatIntent || 'build'}
+- 요구되는 결과: ${state.dramaticState?.outcomeConstraint || 'open'}
+- 구체적인 조건·대가: ${state.dramaticState?.pressureSource || '없음'}
+- 안도 또는 보상의 근거: ${state.dramaticState?.reliefReason || '없음'}
 
 이 캐릭터만 가진 관련 기억:
 ${memoryText || '- 아직 저장된 개인 기억이 없습니다.'}
@@ -55,13 +60,15 @@ ${publicHistory || '아직 공개 로그가 없습니다.'}
 5. nextState에는 이번 응답 뒤의 단기 목표, 내적 갈등, 믿음, 약속, 성장 메모를 기존 상태와 이어지게 작성하세요. 급격한 인격 변화나 초기 설정 재작성은 금지합니다.
 6. memory는 오래 유지할 가치가 있는 새 사실만 한 문장으로 작성하세요. 단순 감정 반복이나 이미 기억에 있는 내용이면 비우세요. 중요도는 0~100이며 저장할 가치가 충분할 때만 60 이상을 사용하세요.
 7. relationshipChanges에는 공개된 상호작용으로 실제 변화가 생긴 경우만 -10~10 delta, 변경 뒤 관계 설명 label, 근거 reason을 작성하세요.
-8. sceneSignal은 계속 진행이면 continue, 반복되어 개입이 필요하면 stalled, 현재 장면 목표가 끝났으면 complete입니다.
-9. shouldRespond=false이면 memory는 빈 문자열, memoryImportance는 0, relationshipChanges는 빈 배열, sceneSignal은 continue이며 nextState는 기존 상태를 유지하세요.
-10. 출력은 지정된 JSON schema만 만족해야 합니다.`;
+8. beatOutcome은 요구되는 결과와 같아야 합니다. qualified_success는 수락·성공과 함께 실제 조건이나 책임을 남기고, setback은 시도가 실제로 막힐 때만 사용합니다. 이 두 결과에서는 conditionOrCost를 구체적으로 작성하세요.
+9. success나 release 비트에서는 억지 문제를 새로 만들지 말고 보상을 충분히 보여 줄 수 있습니다. 다만 직전 대사를 단순히 다시 확인하지 마세요.
+10. sceneSignal은 계속 진행이면 continue, 반복되어 개입이 필요하면 stalled, 현재 장면 목표가 끝났으면 complete입니다.
+11. shouldRespond=false이면 memory는 빈 문자열, memoryImportance는 0, relationshipChanges는 빈 배열, beatOutcome은 open, conditionOrCost는 빈 문자열, sceneSignal은 continue이며 nextState는 기존 상태를 유지하세요.
+12. 출력은 지정된 JSON schema만 만족해야 합니다.`;
 }
 
 export function buildDirectorProgressionPrompt(state, participants) {
-  const history = state.logs.slice(-24).map((log) => publicLog(log, state)).join('\n\n');
+  const history = state.logs.slice(-24).map((log) => publicLog(log, state, true)).join('\n\n');
   const intensityRules = {
     gentle: '목표 긴장도 25~50. 내적 갈등, 타이밍, 현실적 제약처럼 되돌릴 수 있는 압력을 사용하세요.',
     balanced: '목표 긴장도 40~70. 장면마다 상충하는 욕구나 실제 대가를 하나 이상 유지하세요.',
@@ -85,10 +92,14 @@ action 규칙:
 3. TRANSITION_SCENE: 현재 목표가 실제로 끝났을 때만 새 Scene을 설계합니다. nextScene participantIds에는 실제 현장에 있는 인물만 넣고 responders도 그 안에서 고릅니다.
 4. PROPOSE_MAJOR: 죽음, 영구 부상·이탈, 중대한 비밀 폭로, 관계 파기, 세계 설정 변경처럼 되돌리기 어려운 전개가 필요할 때만 사용하고 서로 다른 2~3개 안과 각각의 대가를 작성합니다. 자동 적용하지 않습니다.
 5. 한 캐릭터의 complete 신호만 믿지 말고 미해결 질문과 선택이 남았는지 검토하세요.
-6. 같은 감정 확인이나 같은 beatType을 반복하지 마세요. 투입한 선택은 이후 응답이 실제로 다루게 하세요.
-7. storyState와 sceneState는 이번 판단 뒤의 완전한 최신 상태로 반환하세요. recentBeats는 최근 8개까지만 유지합니다.
-8. eventPlan과 nextScene은 사용하지 않는 action에서도 빈 문자열과 빈 배열로 모든 필드를 채우세요.
-9. 지정된 JSON schema만 출력하세요.`;
+6. beatPlan.phase는 build/pressure/choice/consequence/release, outcome은 open/success/qualified_success/setback 중 하나입니다. 평온한 성공과 release를 정상적인 전개로 취급하세요.
+7. 긴장은 파동이어야 합니다. rise를 연속 세 번 선택하지 말고, 큰 보상 뒤에는 hold 또는 fall을 우선하세요. tensionDirection은 실제 storyState.tension 변화와 일치해야 하며 ±2 이하는 hold입니다.
+8. 같은 phase와 outcome이 반복되면 다음에는 기능을 바꾸세요. 그렇다고 두 번마다 사건이나 실패를 강제하지 말고, 질문을 닫거나 관점을 바꾸거나 조건부 성공을 사용할 수 있습니다.
+9. qualified_success와 setback에는 인물이 원하는 것을 그대로 얻지 못하게 하는 구체적인 조건·책임·대가를 conditionOrCost에 작성하세요. release+success에는 왜 안도해도 되는지 reliefReason을 작성하세요.
+10. 호의와 제안을 연속해서 무조건 수락시키지 마세요. 수락 자체가 자연스럽다면 미해결 질문을 하나 닫고, 다음 책임은 미래 상태로 남기되 즉석 위기를 덧붙이지 마세요.
+11. storyState와 sceneState는 이번 판단 뒤의 완전한 최신 상태로 반환하세요. recentBeats는 최근 8개까지만 유지합니다.
+12. eventPlan과 nextScene은 사용하지 않는 action에서도 빈 문자열과 빈 배열로 모든 필드를 채우세요.
+13. 지정된 JSON schema만 출력하세요.`;
 }
 
 export function buildResponderSelectionPrompt({ state, participants, minimum }) {

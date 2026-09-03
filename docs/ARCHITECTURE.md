@@ -19,9 +19,9 @@ Every WorldCharacter keeps at most one active Codex thread. The server starts it
 
 ## Story dynamics
 
-`projects.story_state` holds the arc phase, tension, pacing, active tensions, open questions, recent beats and the last Director sequence. `scenes.dramatic_state` holds the current objective, stakes, dilemma, beat type, target tension and explicit participant ids. Character `current_state` holds the current goal, internal conflict, beliefs, commitments and development notes.
+`projects.story_state` holds the arc phase, tension, pacing, active tensions, open questions, recent beats, rhythm state and the last Director sequence. Rhythm records the current function (`build/pressure/choice/consequence/release`), planned result (`open/success/qualified_success/setback`), repeated-result count and tension direction. `scenes.dramatic_state` holds the current objective, stakes, dilemma, beat type, target tension, explicit participant ids and the current beat guidance. Character `current_state` holds the current goal, internal conflict, beliefs, commitments and development notes.
 
-The user selects `gentle`, `balanced`, or `high` per world. This controls Director cadence and acceptable pressure; it does not select a model. Ordinary reversible developments may be inserted automatically. Irreversible developments are emitted as two or three `MAJOR` options, pause browser auto-progress, and require explicit apply or reject-all.
+The user selects `gentle`, `balanced`, or `high` per world. This controls Director cadence and acceptable pressure; it does not select a model. Tension is a wave rather than a monotonic target: outside climax, a third consecutive rise is rejected, while release and unqualified success are valid after earned payoff. Repeated narrative function/outcome pairs must change without forcing an arbitrary disaster. Ordinary reversible developments may be inserted automatically. Irreversible developments are emitted as two or three `MAJOR` options, pause browser auto-progress, and require explicit apply or reject-all.
 
 ## Progression lifecycle
 
@@ -31,7 +31,9 @@ The user selects `gentle`, `balanced`, or `high` per world. This controls Direct
 4. Minor events and scene transitions are stored transactionally before character generation. A transition and the first response occur within the same durable progression operation.
 5. Major proposals are stored without changing history; the operation completes with `awaitingDecision` and no character is called.
 6. For each chosen responder, retrieve newly visible Events and up to six active private memories, build the bounded character prompt, and call its persistent thread serially.
-7. Validate structured output. In one transaction store the response, current character state, directed relationship changes, qualifying private memory and event cursor.
+7. Validate structured output, including whether the character honored the planned beat result and supplied a real condition/cost for qualified success or setback. In one transaction store the response, beat result, current character state, directed relationship changes, qualifying private memory and event cursor.
+
+If Codex times out or the app-server disconnects during a character step, the runner retries that generation once with a fresh app-server connection. A still-failing operation remains durable and can be resumed with `POST /api/operations/:id/retry`; completed Director events, scene transitions and character steps are reused instead of being generated twice.
 
 A character response no longer directly completes and transitions a Scene. The Director evaluates the combined history on the next progression, preventing one character from forcing an immediate transition before others react.
 

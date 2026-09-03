@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { generateCharacterSuggestion, generateCodexTurn, listCodexModels } from './codex-client.js';
 import { appendSceneEvent, buildTurnContext, getActiveParticipants, getStoryState, persistGeneratedTurn } from './story-engine.js';
 import { endStage, failRun, failStage, finishRun, snapshot, startRun, startStage, subscribe } from './runtime-telemetry.js';
-import { enqueueProgression, getOperation, resumeQueuedOperations } from './progression-runner.js';
+import { enqueueProgression, getOperation, resumeQueuedOperations, retryProgression } from './progression-runner.js';
 import { applyDirectorEvent, createDirectorSuggestions, listEventSuggestions, rejectMajorSuggestions } from './director-engine.js';
 import { clonePlaythrough, resetPlaythrough } from './project-lifecycle.js';
 import { cancelWorldDraft, converseWorldDraft, createWorldFromDraft, getWorldDraft, listWorldDrafts, saveWorldDraft, startWorldDraft } from './world-builder.js';
@@ -190,6 +190,14 @@ app.get('/api/operations/:id', async (req, res, next) => {
     const operation = await getOperation(pool, projectIdFrom(req), req.params.id);
     if (!operation) return res.status(404).json({ error: 'Operation not found.' });
     res.json(operation);
+  } catch (error) { next(error); }
+});
+
+app.post('/api/operations/:id/retry', async (req, res, next) => {
+  try {
+    const projectId = projectIdFrom(req);
+    await retryProgression(pool, projectId, req.params.id);
+    res.status(202).json({ operationId: req.params.id });
   } catch (error) { next(error); }
 });
 

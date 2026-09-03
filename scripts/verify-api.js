@@ -111,6 +111,9 @@ try {
   const afterTurn = await request('/api/state');
   if (afterEvent.sceneNumber !== before.sceneNumber || afterEvent.logs.length !== before.logs.length + 1 || afterEvent.logs.at(-1).type !== 'event') throw new Error('Mid-conversation event validation failed.');
   if (afterTurn.logs.length < before.logs.length + 2 || afterTurn.logs.at(-1).type !== 'message' || afterTurn.turn <= before.turn) throw new Error('Turn persistence validation failed.');
+  if (!['build','pressure','choice','consequence','release'].includes(operation.result?.beatPhase) || !['open','success','qualified_success','setback'].includes(operation.result?.beatOutcome) || !['rise','hold','fall'].includes(operation.result?.tensionDirection)) throw new Error('Structured story rhythm metadata is missing from the progression result.');
+  if (afterTurn.storyState.rhythm.phase !== operation.result.beatPhase || afterTurn.storyState.rhythm.lastOutcome !== operation.result.beatOutcome) throw new Error('Persisted story rhythm does not match the Director plan.');
+  if (afterTurn.logs.at(-1).payload?.beatOutcome !== operation.result.beatOutcome) throw new Error('Character beat outcome was not persisted with the scene entry.');
   const runtimeSnapshot = await request('/api/runtime/snapshot');
   const progressionRun = runtimeSnapshot.runs.find((run) => run.projectId === projectId && run.type === 'progression' && run.status === 'completed');
   const characterGeneration = progressionRun?.stages.find((stage) => stage.name === 'model_generate' && stage.metadata.usage?.startsWith('캐릭터 응답'));
@@ -129,7 +132,7 @@ try {
   const inheritedSettings = await request('/api/runtime/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(preservePayload) });
   const inheritedCharacter = inheritedSettings.characters.find((character) => character.id === preservePayload.characters[0].id);
   if (inheritedCharacter.modelOverride !== null || inheritedCharacter.reasoningEffortOverride !== null || inheritedCharacter.effectiveModel !== inheritedSettings.project.character.model || inheritedCharacter.threadId !== threadIdsBeforeSave.get(inheritedCharacter.id)) throw new Error('Character inheritance did not preserve the existing thread.');
-  console.log(JSON.stringify({ createdWorldId, createdCharacters: createdWorld.state.characters.length, configuredModel: testModel.id, configuredEffort: testEffort, preservedThreads: [...threadIdsBeforeSave.values()].filter(Boolean).length, inheritedCharacter: inheritedCharacter.name, beforeScene: before.sceneNumber, afterScene: afterEvent.sceneNumber, afterTurn: afterTurn.turn, signal: afterTurn.sceneSignal }, null, 2));
+  console.log(JSON.stringify({ createdWorldId, createdCharacters: createdWorld.state.characters.length, configuredModel: testModel.id, configuredEffort: testEffort, preservedThreads: [...threadIdsBeforeSave.values()].filter(Boolean).length, inheritedCharacter: inheritedCharacter.name, beforeScene: before.sceneNumber, afterScene: afterEvent.sceneNumber, afterTurn: afterTurn.turn, beat: `${operation.result.beatPhase}/${operation.result.beatOutcome}/${operation.result.tensionDirection}`, signal: afterTurn.sceneSignal }, null, 2));
 } finally {
   server?.kill();
   if (createdWorldId) await pool.query('DELETE FROM projects WHERE id=$1', [createdWorldId]);

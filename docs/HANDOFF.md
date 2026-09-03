@@ -20,6 +20,9 @@ Last updated: 2026-09-03 (Asia/Seoul)
 - World Builder drafts capture intensity, premise, core tensions and an opening question; new worlds start with populated story, Scene and character state.
 - The play UI shows compact story tension/objective/active tensions and major-decision cards. The monitor records Director planning/action and tension movement.
 - Moved `현재 설정으로 새 진행` and destructive `현재 진행 처음부터 다시 시작` out of the world editor into the menu beside the current-project selector. `＋ 새 월드` remains a separate creation action.
+- Added structured story rhythm so Director decisions distinguish build, pressure, choice, consequence and release. Tension direction must match its numeric change, cannot rise three times outside climax, and repeated function/result pairs are rejected.
+- Character responses now persist `open/success/qualified_success/setback`; qualified success and setback require a concrete condition or cost. Earned success/release is explicitly allowed without an immediate artificial crisis.
+- Transient character generation is retried once. A failed progression can be resumed through `POST /api/operations/:id/retry` without repeating its completed Director event or scene transition.
 
 ## Database migration
 

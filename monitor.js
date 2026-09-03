@@ -23,7 +23,7 @@ function render() {
   $('#connection-state').className = 'status-completed';
   $('#run-status').textContent = run ? statusText(run.status) : '대기 중';
   $('#run-status').className = run ? `status-${run.status}` : '';
-  $('#run-detail').textContent = run ? `${runLabel(run.type)}${run.metadata?.activeCharacterName || run.metadata?.characterName ? ` · 캐릭터 ${run.metadata.activeCharacterName || run.metadata.characterName}` : ''}${run.metadata?.directorAction ? ` · ${run.metadata.directorAction}` : ''}${run.metadata?.tensionAfter != null ? ` · 긴장 ${run.metadata.tensionBefore ?? '?'}→${run.metadata.tensionAfter}` : ''}` : '새 요청을 기다리고 있습니다';
+  $('#run-detail').textContent = run ? `${runLabel(run.type)}${run.metadata?.activeCharacterName || run.metadata?.characterName ? ` · 캐릭터 ${run.metadata.activeCharacterName || run.metadata.characterName}` : ''}${run.metadata?.directorAction ? ` · ${run.metadata.directorAction}` : ''}${run.metadata?.beatPhase ? ` · ${run.metadata.beatPhase}/${run.metadata.beatOutcome}` : ''}${run.metadata?.tensionAfter != null ? ` · 긴장 ${run.metadata.tensionBefore ?? '?'}→${run.metadata.tensionAfter} ${run.metadata.tensionDirection || ''}` : ''}` : '새 요청을 기다리고 있습니다';
   $('#total-duration').textContent = run ? ms(run.durationMs ?? Date.now() - Date.parse(run.startedAt)) : '—';
   const completedStages = run?.stages.filter((stage) => stage.durationMs != null) || [];
   const bottleneck = completedStages.toSorted((a, b) => b.durationMs - a.durationMs)[0];
