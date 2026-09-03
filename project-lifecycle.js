@@ -1,4 +1,30 @@
 import { randomUUID } from 'node:crypto';
+import { cleanDramaticState, cleanStoryState, emptyDramaticState, emptyStoryState } from './story-dynamics.js';
+
+const hasState = (value) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length > 0;
+
+function seedInitialStoryState(world, characterIds) {
+  if (hasState(world.storyState)) return cleanStoryState(world.storyState, characterIds);
+  const summary = String(world.description || '인물들이 새로운 상황에서 각자의 목표를 향해 움직이기 시작한다.').trim();
+  return cleanStoryState({
+    ...emptyStoryState(),
+    activeTensions: [{ id: randomUUID(), summary, involvedCharacterIds: characterIds, pressure: 35, introducedAtSequence: 0 }],
+    openQuestions: [{ id: randomUUID(), text: '이 상황에서 인물들은 무엇을 선택할 것인가?', involvedCharacterIds: characterIds, urgency: 40, introducedAtSequence: 0 }]
+  }, characterIds);
+}
+
+function seedInitialDramaticState(world, characterIds, storyState) {
+  if (hasState(world.dramaticState)) return cleanDramaticState(world.dramaticState, characterIds);
+  return cleanDramaticState({
+    ...emptyDramaticState(),
+    objective: '인물들이 현재 상황에 어떻게 대응할지 드러냅니다.',
+    stakes: String(world.description || '').trim(),
+    dilemma: '각자의 목표와 관계 속에서 첫 선택을 해야 합니다.',
+    beatType: 'choice',
+    targetTension: storyState.tension,
+    participantIds: characterIds
+  }, characterIds);
+}
 
 const initialWorld = (project) => {
   const saved = project.initialWorld || {};
@@ -53,11 +79,15 @@ export async function resetPlaythrough(pool, projectId) {
       secret=COALESCE(NULLIF(initial_profile->>'secret',''),secret),emotion=COALESCE(NULLIF(initial_profile->>'emotion',''),'기대'),
       current_state=jsonb_build_object('currentGoal',COALESCE(NULLIF(initial_profile->>'goal',''),goal),'internalConflict','','beliefs','[]'::jsonb,'commitments','[]'::jsonb,'developmentNotes','[]'::jsonb,'lastChangedSequence',0),active_thread_id=NULL,active_thread_turn_count=0,active_thread_context_tokens=0,thread_rollover_required=FALSE,last_scanned_event_sequence=NULL,pending_operation_step_id=NULL,updated_at=NOW()
       WHERE project_id=$1`, [projectId]);
+    const characterIds = (await client.query('SELECT id FROM characters WHERE project_id=$1 ORDER BY sort_order', [projectId])).rows.map((row) => row.id);
+    world.storyState = seedInitialStoryState(world, characterIds);
+    world.dramaticState = seedInitialDramaticState(world, characterIds, world.storyState);
     await client.query('UPDATE relationships SET label=COALESCE(initial_label,label),score=COALESCE(initial_score,score),updated_at=NOW() WHERE project_id=$1', [projectId]);
     await client.query(`UPDATE projects SET title=$2,location=$3,mood=$4,scene_time=$5,description=$6,rules=$7,
       scene_number=1,turn_number=0,next_event_sequence=1,public_direction='인물들이 현재 상황에서 자연스럽게 대화를 시작합니다.',private_director_state='',
-      active_director_thread_id=NULL,director_thread_turn_count=0,director_thread_context_tokens=0,director_thread_rollover_required=FALSE,last_director_event_sequence=NULL,drama_intensity=$8,story_state=$9,updated_at=NOW() WHERE id=$1`,
-    [projectId, world.title, world.location, world.mood, world.time, world.description, world.rules, world.dramaIntensity, JSON.stringify(world.storyState || {})]);
+      active_director_thread_id=NULL,director_thread_turn_count=0,director_thread_context_tokens=0,director_thread_rollover_required=FALSE,last_director_event_sequence=NULL,drama_intensity=$8,story_state=$9,
+      initial_world=initial_world || $10::jsonb,updated_at=NOW() WHERE id=$1`,
+    [projectId, world.title, world.location, world.mood, world.time, world.description, world.rules, world.dramaIntensity, JSON.stringify(world.storyState), JSON.stringify({ storyState: world.storyState, dramaticState: world.dramaticState })]);
     await insertInitialScene(client, projectId, world);
     await client.query('COMMIT');
   } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
@@ -86,9 +116,13 @@ export async function clonePlaythrough(pool, sourceProjectId, requestedTitle = '
     const relationships = (await client.query('SELECT * FROM relationships WHERE project_id=$1', [sourceProjectId])).rows;
     for (const relationship of relationships) await client.query(`INSERT INTO relationships(id,project_id,from_character_id,to_character_id,label,score,initial_label,initial_score)
       VALUES ($1,$2,$3,$4,$5,$6,$5,$6)`, [randomUUID(),targetProjectId,idMap.get(relationship.from_character_id),idMap.get(relationship.to_character_id),relationship.initial_label||relationship.label,relationship.initial_score??relationship.score]);
+    const targetCharacterIds = [...idMap.values()];
     const remapIds = (items = []) => items.map((item) => ({ ...item, involvedCharacterIds: (item.involvedCharacterIds || []).map((id) => idMap.get(id)).filter(Boolean) }));
-    const clonedStoryState = Object.keys(world.storyState || {}).length ? { ...world.storyState, activeTensions: remapIds(world.storyState.activeTensions), openQuestions: remapIds(world.storyState.openQuestions), recentBeats: [], lastDirectorSequence: 0 } : {};
-    world.dramaticState = Object.keys(world.dramaticState || {}).length ? { ...world.dramaticState, participantIds: (world.dramaticState.participantIds || []).map((id) => idMap.get(id)).filter(Boolean) } : {};
+    const remappedStoryState = hasState(world.storyState) ? { ...world.storyState, activeTensions: remapIds(world.storyState.activeTensions), openQuestions: remapIds(world.storyState.openQuestions), recentBeats: [], lastDirectorSequence: 0 } : {};
+    const remappedDramaticState = hasState(world.dramaticState) ? { ...world.dramaticState, participantIds: (world.dramaticState.participantIds || []).map((id) => idMap.get(id)).filter(Boolean) } : {};
+    const clonedStoryState = seedInitialStoryState({ ...world, storyState: remappedStoryState }, targetCharacterIds);
+    world.dramaticState = seedInitialDramaticState({ ...world, dramaticState: remappedDramaticState }, targetCharacterIds, clonedStoryState);
+    world.storyState = clonedStoryState;
     await client.query('UPDATE projects SET story_state=$2,initial_world=initial_world || $3::jsonb WHERE id=$1', [targetProjectId, JSON.stringify(clonedStoryState), JSON.stringify({ storyState: clonedStoryState, dramaticState: world.dramaticState })]);
     await insertInitialScene(client, targetProjectId, world);
     await client.query('COMMIT');

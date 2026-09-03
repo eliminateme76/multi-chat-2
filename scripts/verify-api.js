@@ -159,6 +159,11 @@ try {
   const cloned = await request('/api/projects/clone', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: 'API 검증 복제 월드' }) });
   clonedWorldId = cloned.projectId;
   if (cloned.state.characters.length !== afterTurn.characters.length || cloned.state.characters.some((character) => afterTurn.characters.some((source) => source.id === character.id) || character.activeThreadId)) throw new Error('Playthrough clone did not issue clean world-local character/thread ids.');
+  if (cloned.state.repairNeeded || !Object.keys(cloned.state.storyState || {}).length || cloned.state.dramaticState.participantIds.length !== cloned.state.characters.length) throw new Error('A fresh cloned playthrough was incorrectly treated as a legacy world.');
+  const resetCloneResponse = await fetch(`${baseUrl}/api/projects/reset?projectId=${clonedWorldId}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+  if (!resetCloneResponse.ok) throw new Error(`Clone reset failed: ${await resetCloneResponse.text()}`);
+  const resetClone = await resetCloneResponse.json();
+  if (resetClone.repairNeeded || resetClone.logs.length || !Object.keys(resetClone.storyState || {}).length || resetClone.dramaticState.participantIds.length !== resetClone.characters.length) throw new Error('A reset playthrough did not restore a complete initial story state.');
   console.log(JSON.stringify({ createdWorldId, clonedWorldId, createdCharacters: createdWorld.state.characters.length, configuredModel: testModel.id, configuredEffort: testEffort, preservedThreads: [...threadIdsBeforeSave.values()].filter(Boolean).length, inheritedCharacter: inheritedCharacter.name, beforeScene: before.sceneNumber, afterScene: afterEvent.sceneNumber, afterTurn: afterTurn.turn, worldResolution: `${operation.result.worldPhase}/${operation.result.worldOutcome}/${operation.result.tensionDirection}`, signal: afterTurn.sceneSignal, oneResponsePerOperation: operation.steps.length === 1, reusedDirectorPlan: reusedOperation.result.planReused, firstOperationMs: Date.parse(operation.completedAt) - Date.parse(operation.startedAt), reusedOperationMs: Date.parse(reusedOperation.completedAt) - Date.parse(reusedOperation.startedAt), firstRuntime: operation.result.runtime }, null, 2));
 } finally {
   server?.kill();

@@ -8,7 +8,8 @@ const activeProjects = new Set();
 const minResponders = () => 1;
 
 export async function enqueueProgression(pool, projectId, { mode = 'AUTO', responderIds = [] } = {}) {
-  const gate = (await pool.query(`SELECT p.story_state='{}'::jsonb AS "repairNeeded",EXISTS(
+  const gate = (await pool.query(`SELECT p.story_state='{}'::jsonb AND EXISTS(
+    SELECT 1 FROM scene_entries e WHERE e.project_id=p.id) AS "repairNeeded",EXISTS(
     SELECT 1 FROM event_suggestion_batches b JOIN event_suggestions s ON s.batch_id=b.id AND s.status='AVAILABLE'
     WHERE b.project_id=p.id AND b.origin='DIRECTOR_MAJOR' AND b.status='ACTIVE') AS "majorPending"
     FROM projects p WHERE p.id=$1`, [projectId])).rows[0];

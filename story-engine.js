@@ -45,7 +45,7 @@ export async function getStoryState(queryable, projectId) {
     sceneNumber: project.sceneNumber, sceneSummary: project.sceneSummary, sceneSignal: project.sceneSignal, presentationMode: project.presentationMode,
     publicDirection: project.publicDirection, directorNote: project.publicDirection, turn: project.turn, dramaIntensity: project.dramaIntensity,
     storyState: cleanStoryState(project.storyState, characters.rows.map((item) => item.id)), dramaticState: cleanDramaticState(project.dramaticState, characters.rows.map((item) => item.id)),
-    storyStatus: publicStoryStatus(project.storyState, project.dramaticState, project.dramaIntensity), repairNeeded: !project.storyState || Object.keys(project.storyState).length === 0,
+    storyStatus: publicStoryStatus(project.storyState, project.dramaticState, project.dramaIntensity), repairNeeded: (!project.storyState || Object.keys(project.storyState).length === 0) && entries.rowCount > 0,
     pendingMajorDecision: pendingMajor,
     aiSettings: {
       character: { model: project.defaultModel, reasoningEffort: project.defaultReasoningEffort },

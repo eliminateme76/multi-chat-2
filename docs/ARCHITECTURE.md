@@ -47,7 +47,7 @@ Character output proposes a compact current-state patch, 0–100 memory importan
 
 ## Legacy-world repair
 
-Worlds whose `story_state` is empty cannot progress until reviewed. `POST /api/story-repair` asks the persistent Director to analyze existing Scenes, Events, relationships, character state and active memories. It creates a `PENDING` preview only and never rewrites event history. Apply is accepted only if the world sequence is unchanged, then atomically updates story/scene/character state, current relationships, participants and memory archive flags. Reject leaves story data unchanged. Stale proposals must be regenerated.
+Legacy worlds whose `story_state` is empty **and which already contain event history** cannot progress until reviewed. A clean reset or cloned playthrough instead receives a deterministic initial story/scene state and never requires legacy repair. `POST /api/story-repair` asks the persistent Director to analyze existing Scenes, Events, relationships, character state and active memories. It creates a `PENDING` preview only and never rewrites event history. Apply is accepted only if the world sequence is unchanged, then atomically updates story/scene/character state, current relationships, participants and memory archive flags. Reject leaves story data unchanged. Stale proposals must be regenerated.
 
 ## World creation and reset
 

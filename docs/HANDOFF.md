@@ -34,6 +34,7 @@ Last updated: 2026-09-03 (Asia/Seoul)
 - Director chooses one or two characters with an immediate opportunity to react, separately from Scene participants. It does not choose their behavior. Scene transitions use explicit participant ids and generate the first response in the same operation.
 - Character turns persist bounded current-state snapshots and directed relationship labels/scores. Durable memory requires importance 60+, is deduplicated, capped at twelve active rows, and archived instead of deleted.
 - Added AI-generated legacy-world repair preview/apply/reject. Event history is never rewritten and apply is sequence-checked and transactional.
+- Fixed clean reset/clone playthroughs inherited from pre-story-state worlds being mistaken for legacy history. They now receive a complete initial story/scene state; repair is gated only when empty state and existing events occur together. Migration 015 backfills already-created clean playthroughs.
 - World Builder drafts capture intensity, premise, core tensions and an opening question; new worlds start with populated story, Scene and character state.
 - The play UI shows compact story tension/objective/active tensions and major-decision cards. The monitor records Director world judgment/action and tension movement.
 - Moved `현재 설정으로 새 진행` and destructive `현재 진행 처음부터 다시 시작` out of the world editor into the menu beside the current-project selector. `＋ 새 월드` remains a separate creation action.
