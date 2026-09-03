@@ -1,5 +1,5 @@
 const stages = [
-  ['state_load', 'DB STATE', '상태 조회'], ['speaker_select', 'ROUTER', '화자 선택'], ['memory_retrieve', 'MEMORY', '기억 검색'],
+  ['state_load', 'DB STATE', '상태 조회'], ['director_plan', 'DIRECTOR', '전개 판단'], ['speaker_select', 'ROUTER', '화자 선택'], ['memory_retrieve', 'MEMORY', '기억 검색'],
   ['context_build', 'CONTEXT', '프롬프트 조립'], ['queue_wait', 'QUEUE', '요청 대기'], ['app_server_ready', 'APP SERVER', '프로세스 준비'],
   ['thread_start', 'THREAD', 'Thread 생성'], ['model_generate', 'MODEL', '응답 생성'], ['output_validate', 'VALIDATOR', '출력 검증'], ['db_transaction', 'DATABASE', '상태 저장']
 ];
@@ -23,7 +23,7 @@ function render() {
   $('#connection-state').className = 'status-completed';
   $('#run-status').textContent = run ? statusText(run.status) : '대기 중';
   $('#run-status').className = run ? `status-${run.status}` : '';
-  $('#run-detail').textContent = run ? `${runLabel(run.type)}${run.metadata?.activeCharacterName || run.metadata?.characterName ? ` · 캐릭터 ${run.metadata.activeCharacterName || run.metadata.characterName}` : ''}` : '새 요청을 기다리고 있습니다';
+  $('#run-detail').textContent = run ? `${runLabel(run.type)}${run.metadata?.activeCharacterName || run.metadata?.characterName ? ` · 캐릭터 ${run.metadata.activeCharacterName || run.metadata.characterName}` : ''}${run.metadata?.directorAction ? ` · ${run.metadata.directorAction}` : ''}${run.metadata?.tensionAfter != null ? ` · 긴장 ${run.metadata.tensionBefore ?? '?'}→${run.metadata.tensionAfter}` : ''}` : '새 요청을 기다리고 있습니다';
   $('#total-duration').textContent = run ? ms(run.durationMs ?? Date.now() - Date.parse(run.startedAt)) : '—';
   const completedStages = run?.stages.filter((stage) => stage.durationMs != null) || [];
   const bottleneck = completedStages.toSorted((a, b) => b.durationMs - a.durationMs)[0];
@@ -199,7 +199,7 @@ async function refreshThreads() {
 }
 
 function labelFor(name) { return stages.find(([key]) => key === name)?.[2] || name; }
-function runLabel(type) { return ({ turn: '단일 턴 생성', progression: '월드 진행', character_suggestion: '캐릭터 추천', event_suggestions: '사건 추천', director_event: '디렉터 사건 적용', world_draft: '월드 초안 설계', world_create: '새 월드 생성' })[type] || type; }
+function runLabel(type) { return ({ turn: '단일 턴 생성', progression: '월드 진행', character_suggestion: '캐릭터 추천', event_suggestions: '사건 추천', director_event: '디렉터 사건 적용', story_repair: '이야기 상태 진단', world_draft: '월드 초안 설계', world_create: '새 월드 생성' })[type] || type; }
 function statusText(status) { return ({ running: '실행 중', completed: '완료', failed: '실패', queued: '대기 중', idle: '대기' })[status] || status; }
 
 async function initialize() {

@@ -28,12 +28,13 @@ const request = async (path, options) => {
 async function seedTemporaryProject() {
   await pool.query('BEGIN');
   try {
-    await pool.query(`INSERT INTO projects (id,title,location,mood,scene_time,description,rules,public_direction,private_director_state)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [projectId, 'API 검증 세계', '검증실', '긴장', '자정', '세 인물이 잠긴 상자를 조사한다.', '공개된 증거만 사용한다.', '상자의 단서를 구체적으로 조사하세요.', '두 번째 인물이 열쇠를 숨겼다.']);
+    const storyState = { version: 1, arcPhase: 'setup', tension: 45, pacing: 'steady', activeTensions: [{ id: 'locked-box', summary: '잠긴 상자의 정체와 숨겨진 열쇠', involvedCharacterIds: characterIds, pressure: 45, introducedAtSequence: 0 }], openQuestions: [{ id: 'who-hid-key', text: '누가 왜 열쇠를 숨겼는가?', involvedCharacterIds: characterIds, urgency: 50, introducedAtSequence: 0 }], recentBeats: [], lastDirectorSequence: 0 };
+    await pool.query(`INSERT INTO projects (id,title,location,mood,scene_time,description,rules,public_direction,private_director_state,story_state)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, [projectId, 'API 검증 세계', '검증실', '긴장', '자정', '세 인물이 잠긴 상자를 조사한다.', '공개된 증거만 사용한다.', '상자의 단서를 구체적으로 조사하세요.', '두 번째 인물이 열쇠를 숨겼다.', JSON.stringify(storyState)]);
     for (const [index, id] of characterIds.entries()) await pool.query(`INSERT INTO characters (id,project_id,name,role,personality,speech_style,goal,secret,emotion,sort_order)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, [id, projectId, `검증인물${index + 1}`, '조사자', '침착함, 관찰력', '간결한 존댓말', '상자의 정체를 밝힌다.', `개인 비밀 ${index + 1}`, '집중', index]);
-    await pool.query(`INSERT INTO scenes (id,project_id,scene_number,location,mood,scene_time,description,summary,public_direction,private_director_state)
-      VALUES ($1,$2,1,$3,$4,$5,$6,$6,$7,$8)`, [sceneId, projectId, '검증실', '긴장', '자정', '세 인물이 잠긴 상자를 조사한다.', '상자의 단서를 구체적으로 조사하세요.', '두 번째 인물이 열쇠를 숨겼다.']);
+    await pool.query(`INSERT INTO scenes (id,project_id,scene_number,location,mood,scene_time,description,summary,public_direction,private_director_state,dramatic_state)
+      VALUES ($1,$2,1,$3,$4,$5,$6,$6,$7,$8,$9)`, [sceneId, projectId, '검증실', '긴장', '자정', '세 인물이 잠긴 상자를 조사한다.', '상자의 단서를 구체적으로 조사하세요.', '두 번째 인물이 열쇠를 숨겼다.', JSON.stringify({ objective: '상자를 열 방법을 결정한다.', stakes: '서로의 신뢰', dilemma: '열쇠를 숨긴 이를 추궁할지 우회할지', beatType: 'choice', targetTension: 50, participantIds: characterIds })]);
     for (const id of characterIds) await pool.query('INSERT INTO scene_participants(scene_id,character_id,joined_sequence) VALUES ($1,$2,0)', [sceneId, id]);
     await pool.query('COMMIT');
   } catch (error) { await pool.query('ROLLBACK'); throw error; }
@@ -75,7 +76,8 @@ try {
   const afterRejectedSettings = await request('/api/runtime/settings');
   if (afterRejectedSettings.project.character.model !== savedRuntimeSettings.project.character.model || afterRejectedSettings.characters.some((character) => character.effectiveModel !== testModel.id)) throw new Error('Rejected runtime settings partially changed the database.');
   await request(`/api/world-drafts/${worldDraftId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ draft: {
-    world: { title: '초안 검증 세계', location: '빈 역 승강장', mood: '고요한 미스터리', time: '막차가 끊긴 밤', description: '두 인물이 오지 않는 열차를 기다리고 있다.', rules: '시간표에 없는 열차에는 함부로 타지 않는다.', presentationMode: 'scene' },
+    world: { title: '초안 검증 세계', location: '빈 역 승강장', mood: '고요한 미스터리', time: '막차가 끊긴 밤', description: '두 인물이 오지 않는 열차를 기다리고 있다.', rules: '시간표에 없는 열차에는 함부로 타지 않는다.', presentationMode: 'scene', dramaIntensity: 'balanced' },
+    story: { premise: '오지 않는 열차와 사라진 승객의 비밀을 좇는다.', openingQuestion: '두 사람은 시간표에 없는 열차를 탈 것인가?', coreTensions: [{ summary: '열차에 타야 하는 이유와 타면 안 되는 이유가 충돌한다.', involvedCharacterKeys: ['hana','jun'], pressure: 48 }] },
     characters: [
       { key: 'hana', name: '하나', gender: '여성', role: '역무원', emoji: '◇', color: '#6757c8', personality: '침착하고 세심함', speechStyle: '차분한 존댓말', goal: '사라진 승객을 찾는다.', secret: '시간표를 몰래 바꾸었다.', emotion: '경계' },
       { key: 'jun', name: '준', gender: '남성', role: '여행자', emoji: '○', color: '#b66b73', personality: '낙천적이지만 집요함', speechStyle: '부드러운 반말', goal: '마지막 열차에 탄다.', secret: '사라진 승객의 편지를 갖고 있다.', emotion: '호기심' }
@@ -85,6 +87,17 @@ try {
   const createdWorld = await request(`/api/world-drafts/${worldDraftId}/create`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
   createdWorldId = createdWorld.projectId;
   if (createdWorld.state.world.title !== '초안 검증 세계' || createdWorld.state.characters.length !== 2 || createdWorld.state.sceneNumber !== 1) throw new Error('World draft creation validation failed.');
+  const repairId = randomUUID();
+  const repairState = (await request('/api/state'));
+  const repairProposal = {
+    summary: '검증용 상태 보정', storyState: { ...repairState.storyState, tension: 46 },
+    sceneState: { objective: '상자의 다음 단서를 선택한다.', stakes: '조사자 사이의 신뢰', dilemma: '직접 열지 도움을 기다릴지', beatType: 'choice', targetTension: 50, participantIds: characterIds.slice(0, 2) },
+    participantIds: characterIds.slice(0, 2), relationships: [], memoryDecisions: [],
+    characterStates: repairState.characters.map((character) => ({ characterId: character.id, state: { currentGoal: character.goal, internalConflict: '신속한 확인과 안전 사이에서 망설인다.', beliefs: [], commitments: [], developmentNotes: [], lastChangedSequence: 0 } }))
+  };
+  await pool.query(`INSERT INTO story_repair_proposals(id,project_id,source_world_sequence,proposal) VALUES ($1,$2,0,$3)`, [repairId, projectId, JSON.stringify(repairProposal)]);
+  const appliedRepair = await request(`/api/story-repair/${repairId}/apply`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+  if (!appliedRepair.applied || appliedRepair.state.participants.length !== 2 || appliedRepair.state.storyState.tension !== 46) throw new Error('Story repair transaction validation failed.');
   const before = await request('/api/state');
   const afterEvent = await request('/api/events', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: '검증용 사건: 상자 안에서 진동이 느껴진다.' }) });
   const queued = await request('/api/turns', { method: 'POST' });

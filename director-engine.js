@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { generateDirectorEventApplication, generateDirectorEventSuggestions, generateDirectorSceneTransition } from './codex-client.js';
 import { appendSceneEvent, createSceneFromEvent, getDirectorContext, getStoryState, updateDirectorThread } from './story-engine.js';
+import { cleanStoryState } from './story-dynamics.js';
 
 async function latestSequence(client, projectId) {
   return Number((await client.query('SELECT COALESCE(MAX(world_sequence),0) AS sequence FROM scene_entries WHERE project_id=$1', [projectId])).rows[0].sequence);
@@ -12,9 +13,11 @@ async function persistDirector(client, projectId, threadId, sequence) {
 
 export async function listEventSuggestions(queryable, projectId) {
   return (await queryable.query(`SELECT s.id,s.batch_id AS "batchId",s.category,s.text,s.scene_time AS time,s.status,s.created_at AS "createdAt",
+      s.severity,s.consequence,s.requires_approval AS "requiresApproval",b.origin AS "batchOrigin",
       s.source_scene_id AS "sourceSceneId",source.scene_number AS "sourceSceneNumber",
       active.id AS "activeSceneId",(s.source_scene_id<>active.id) AS stale
     FROM event_suggestions s
+    JOIN event_suggestion_batches b ON b.id=s.batch_id
     JOIN scenes source ON source.id=s.source_scene_id
     JOIN LATERAL (SELECT id FROM scenes WHERE project_id=$1 AND status='active' ORDER BY scene_number DESC LIMIT 1) active ON TRUE
     WHERE s.project_id=$1 AND s.status='AVAILABLE'
@@ -31,7 +34,7 @@ export async function createDirectorSuggestions(pool, projectId, desiredTypes, r
     const current = await getDirectorContext(client, projectId);
     if (!current || current.state.sceneId !== context.state.sceneId) throw new Error('Scene changed while event suggestions were generated. Try again.');
     await client.query(`UPDATE event_suggestion_batches SET status='SUPERSEDED'
-      WHERE project_id=$1 AND source_scene_id=$2 AND status='ACTIVE'`, [projectId, current.state.sceneId]);
+      WHERE project_id=$1 AND source_scene_id=$2 AND status='ACTIVE' AND origin='MANUAL'`, [projectId, current.state.sceneId]);
     const batchId = randomUUID();
     const sourceSequence = await latestSequence(client, projectId);
     await client.query(`INSERT INTO event_suggestion_batches(id,project_id,source_scene_id,source_world_sequence)
@@ -52,9 +55,10 @@ export async function applyDirectorEvent(pool, projectId, event, runId, suggesti
   const context = await getDirectorContext(pool, projectId);
   if (!context) throw new Error('Project not found.');
   const source = suggestionId
-    ? (await pool.query(`SELECT id,source_scene_id AS "sourceSceneId",category,text,scene_time AS time,status FROM event_suggestions WHERE id=$1 AND project_id=$2`, [suggestionId, projectId])).rows[0]
+    ? (await pool.query(`SELECT id,batch_id AS "batchId",source_scene_id AS "sourceSceneId",category,text,scene_time AS time,status,severity,requires_approval AS "requiresApproval" FROM event_suggestions WHERE id=$1 AND project_id=$2`, [suggestionId, projectId])).rows[0]
     : null;
   if (suggestionId && (!source || source.status !== 'AVAILABLE')) throw new Error('This event suggestion is no longer available.');
+  if (automatic && source?.requiresApproval) throw new Error('중대 전개는 사용자가 직접 선택해야 합니다.');
   const requested = source
     ? { text: source.text, eventType: source.category, time: source.time, forceScene: source.category === '시간 전환', stale: source.sourceSceneId !== context.state.sceneId }
     : { text: event.text, eventType: event.eventType || '일반', time: event.time || '', forceScene: event.eventType === '시간 전환', stale: false };
@@ -70,8 +74,13 @@ export async function applyDirectorEvent(pool, projectId, event, runId, suggesti
     const outcome = plan.applyMode === 'CREATE_SCENE'
       ? await createSceneFromEvent(client, projectId, plan)
       : await appendSceneEvent(client, projectId, { text: plan.text, eventType: plan.eventType, actorType: 'DIRECTOR' });
-    if (suggestionId) await client.query(`UPDATE event_suggestions SET status='APPLIED',applied_entry_id=$2,applied_scene_id=$3,applied_at=NOW()
-      WHERE id=$1`, [suggestionId, outcome.entryId, outcome.sceneId || current.state.sceneId]);
+    if (suggestionId) {
+      await client.query(`UPDATE event_suggestions SET status='APPLIED',applied_entry_id=$2,applied_scene_id=$3,applied_at=NOW() WHERE id=$1`, [suggestionId, outcome.entryId, outcome.sceneId || current.state.sceneId]);
+      if (source.requiresApproval) {
+        await client.query(`UPDATE event_suggestions SET status='DISCARDED' WHERE batch_id=$1 AND id<>$2 AND status='AVAILABLE'`, [source.batchId, suggestionId]);
+        await client.query(`UPDATE event_suggestion_batches SET status='SUPERSEDED' WHERE id=$1`, [source.batchId]);
+      }
+    }
     await persistDirector(client, projectId, plan.threadId, outcome.sequence);
     await client.query('COMMIT');
     return { state: await getStoryState(client, projectId), outcome, plan };
@@ -79,6 +88,23 @@ export async function applyDirectorEvent(pool, projectId, event, runId, suggesti
     await client.query('ROLLBACK');
     throw error;
   } finally { client.release(); }
+}
+
+export async function rejectMajorSuggestions(pool, projectId, batchId) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [projectId]);
+    const batch = (await client.query(`SELECT id FROM event_suggestion_batches WHERE id=$1 AND project_id=$2 AND origin='DIRECTOR_MAJOR' AND status='ACTIVE' FOR UPDATE`, [batchId, projectId])).rows[0];
+    if (!batch) throw new Error('대기 중인 중대 전개안을 찾을 수 없습니다.');
+    await client.query(`UPDATE event_suggestions SET status='DISCARDED' WHERE batch_id=$1 AND status='AVAILABLE'`, [batchId]);
+    await client.query(`UPDATE event_suggestion_batches SET status='SUPERSEDED' WHERE id=$1`, [batchId]);
+    const state = await getStoryState(client, projectId);
+    const storyState = cleanStoryState({ ...state.storyState, recentBeats: [...state.storyState.recentBeats, { sequence: state.latestSceneSequence, type: 'reflection', summary: '사용자가 제안된 중대 전개를 모두 보류했다.' }] }, state.characters.map((character) => character.id), state.storyState);
+    await client.query('UPDATE projects SET story_state=$2,updated_at=NOW() WHERE id=$1', [projectId, JSON.stringify(storyState)]);
+    await client.query('COMMIT');
+    return await getStoryState(client, projectId);
+  } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
 }
 
 export async function transitionCompletedScene(client, projectId, runId) {

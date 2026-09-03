@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
-import { buildCharacterSuggestionPrompt, buildCharacterTurnPrompt, buildEventSuggestionsPrompt, buildDirectorEventApplyPrompt, buildDirectorSceneTransitionPrompt, buildWorldDraftPrompt } from './context-builder.js';
+import { buildCharacterSuggestionPrompt, buildCharacterTurnPrompt, buildDirectorProgressionPrompt, buildEventSuggestionsPrompt, buildDirectorEventApplyPrompt, buildDirectorSceneTransitionPrompt, buildStoryRepairPrompt, buildWorldDraftPrompt } from './context-builder.js';
+import { DIRECTOR_ACTIONS, cleanCharacterState, cleanDramaticState, cleanStoryState } from './story-dynamics.js';
 import { endStage, failStage, recordStage, setRuntimeResource, startStage, updateRunMetadata } from './runtime-telemetry.js';
 
 const CODEX_MODEL = process.env.CODEX_MODEL || 'gpt-5.6-sol';
@@ -11,19 +12,71 @@ const turnSchema = {
   properties: {
     shouldRespond: { type: 'boolean' }, silenceReason: { type: 'string' },
     dialogue: { type: 'string' }, action: { type: 'string' }, emotion: { type: 'string' },
+    nextState: {
+      type: 'object', properties: {
+        currentGoal: { type: 'string' }, internalConflict: { type: 'string' },
+        beliefs: { type: 'array', maxItems: 5, items: { type: 'string' } }, commitments: { type: 'array', maxItems: 5, items: { type: 'string' } },
+        developmentNotes: { type: 'array', maxItems: 6, items: { type: 'string' } }
+      }, required: ['currentGoal','internalConflict','beliefs','commitments','developmentNotes'], additionalProperties: false
+    },
     memory: { type: 'string' }, memoryImportance: { type: 'integer', minimum: 0, maximum: 100 },
     relationshipChanges: {
       type: 'array', maxItems: 3,
       items: {
         type: 'object',
-        properties: { targetId: { type: 'string' }, delta: { type: 'integer', minimum: -10, maximum: 10 } },
-        required: ['targetId', 'delta'], additionalProperties: false
+        properties: { targetId: { type: 'string' }, delta: { type: 'integer', minimum: -10, maximum: 10 }, label: { type: 'string' }, reason: { type: 'string' } },
+        required: ['targetId', 'delta', 'label', 'reason'], additionalProperties: false
       }
     },
     sceneSignal: { type: 'string', enum: ['continue', 'stalled', 'complete'] }
   },
-  required: ['shouldRespond', 'silenceReason', 'dialogue', 'action', 'emotion', 'memory', 'memoryImportance', 'relationshipChanges', 'sceneSignal'],
+  required: ['shouldRespond', 'silenceReason', 'dialogue', 'action', 'emotion', 'nextState', 'memory', 'memoryImportance', 'relationshipChanges', 'sceneSignal'],
   additionalProperties: false
+};
+
+const characterStateSchema = {
+  type: 'object', properties: {
+    currentGoal: { type: 'string' }, internalConflict: { type: 'string' },
+    beliefs: { type: 'array', maxItems: 5, items: { type: 'string' } }, commitments: { type: 'array', maxItems: 5, items: { type: 'string' } },
+    developmentNotes: { type: 'array', maxItems: 6, items: { type: 'string' } }, lastChangedSequence: { type: 'integer', minimum: 0 }
+  }, required: ['currentGoal','internalConflict','beliefs','commitments','developmentNotes','lastChangedSequence'], additionalProperties: false
+};
+
+const storyStateSchema = {
+  type: 'object', properties: {
+    version: { type: 'integer' }, arcPhase: { type: 'string', enum: ['setup','rising','turning','climax','aftermath'] }, tension: { type: 'integer', minimum: 0, maximum: 100 }, pacing: { type: 'string', enum: ['slow','steady','fast'] },
+    activeTensions: { type: 'array', maxItems: 5, items: { type: 'object', properties: { id: { type: 'string' }, summary: { type: 'string' }, involvedCharacterIds: { type: 'array', maxItems: 6, items: { type: 'string' } }, pressure: { type: 'integer', minimum: 0, maximum: 100 }, introducedAtSequence: { type: 'integer', minimum: 0 } }, required: ['id','summary','involvedCharacterIds','pressure','introducedAtSequence'], additionalProperties: false } },
+    openQuestions: { type: 'array', maxItems: 5, items: { type: 'object', properties: { id: { type: 'string' }, text: { type: 'string' }, involvedCharacterIds: { type: 'array', maxItems: 6, items: { type: 'string' } }, urgency: { type: 'integer', minimum: 0, maximum: 100 }, introducedAtSequence: { type: 'integer', minimum: 0 } }, required: ['id','text','involvedCharacterIds','urgency','introducedAtSequence'], additionalProperties: false } },
+    recentBeats: { type: 'array', maxItems: 8, items: { type: 'object', properties: { sequence: { type: 'integer', minimum: 0 }, type: { type: 'string', enum: ['connection','conflict','choice','setback','reveal','discovery','transition','reflection'] }, summary: { type: 'string' } }, required: ['sequence','type','summary'], additionalProperties: false } },
+    lastDirectorSequence: { type: 'integer', minimum: 0 }
+  }, required: ['version','arcPhase','tension','pacing','activeTensions','openQuestions','recentBeats','lastDirectorSequence'], additionalProperties: false
+};
+
+const dramaticStateSchema = {
+  type: 'object', properties: { objective: { type: 'string' }, stakes: { type: 'string' }, dilemma: { type: 'string' }, beatType: { type: 'string', enum: ['connection','conflict','choice','setback','reveal','discovery','transition','reflection'] }, targetTension: { type: 'integer', minimum: 0, maximum: 100 }, participantIds: { type: 'array', maxItems: 6, items: { type: 'string' } } },
+  required: ['objective','stakes','dilemma','beatType','targetTension','participantIds'], additionalProperties: false
+};
+
+const eventPlanProperties = { text: { type: 'string' }, eventType: { type: 'string', enum: ['일상','관계','연락','선택','발견','돌발','시간 전환','분위기','일반'] }, time: { type: 'string' }, location: { type: 'string' }, mood: { type: 'string' }, description: { type: 'string' } };
+const directorProgressionSchema = {
+  type: 'object', properties: {
+    action: { type: 'string', enum: ['CONTINUE','INJECT_MINOR_EVENT','TRANSITION_SCENE','PROPOSE_MAJOR'] }, rationale: { type: 'string' },
+    responders: { type: 'array', minItems: 1, maxItems: 2, items: { type: 'object', properties: { characterId: { type: 'string' }, reason: { type: 'string' } }, required: ['characterId','reason'], additionalProperties: false } },
+    storyState: storyStateSchema, sceneState: dramaticStateSchema,
+    eventPlan: { type: 'object', properties: eventPlanProperties, required: Object.keys(eventPlanProperties), additionalProperties: false },
+    nextScene: { type: 'object', properties: { ...eventPlanProperties, participantIds: { type: 'array', maxItems: 6, items: { type: 'string' } } }, required: [...Object.keys(eventPlanProperties),'participantIds'], additionalProperties: false },
+    majorProposals: { type: 'array', maxItems: 3, items: { type: 'object', properties: { category: { type: 'string', enum: ['관계','선택','발견','돌발','시간 전환','분위기'] }, text: { type: 'string' }, consequence: { type: 'string' }, time: { type: 'string' } }, required: ['category','text','consequence','time'], additionalProperties: false } }
+  }, required: ['action','rationale','responders','storyState','sceneState','eventPlan','nextScene','majorProposals'], additionalProperties: false
+};
+
+const storyRepairSchema = {
+  type: 'object', properties: {
+    summary: { type: 'string' }, storyState: storyStateSchema, sceneState: dramaticStateSchema,
+    participantIds: { type: 'array', minItems: 1, maxItems: 6, items: { type: 'string' } },
+    characterStates: { type: 'array', items: { type: 'object', properties: { characterId: { type: 'string' }, state: characterStateSchema }, required: ['characterId','state'], additionalProperties: false } },
+    relationships: { type: 'array', items: { type: 'object', properties: { from: { type: 'string' }, to: { type: 'string' }, label: { type: 'string' }, score: { type: 'integer', minimum: 0, maximum: 100 } }, required: ['from','to','label','score'], additionalProperties: false } },
+    memoryDecisions: { type: 'array', items: { type: 'object', properties: { memoryId: { type: 'string' }, action: { type: 'string', enum: ['KEEP','ARCHIVE'] } }, required: ['memoryId','action'], additionalProperties: false } }
+  }, required: ['summary','storyState','sceneState','participantIds','characterStates','relationships','memoryDecisions'], additionalProperties: false
 };
 
 const responderSchema = {
@@ -77,8 +130,14 @@ const worldDraftSchema = {
         world: {
           type: 'object', properties: {
             title: { type: 'string' }, location: { type: 'string' }, mood: { type: 'string' }, time: { type: 'string' },
-            description: { type: 'string' }, rules: { type: 'string' }, presentationMode: { type: 'string', enum: ['scene', 'chat'] }
-          }, required: ['title','location','mood','time','description','rules','presentationMode'], additionalProperties: false
+            description: { type: 'string' }, rules: { type: 'string' }, presentationMode: { type: 'string', enum: ['scene', 'chat'] }, dramaIntensity: { type: 'string', enum: ['gentle','balanced','high'] }
+          }, required: ['title','location','mood','time','description','rules','presentationMode','dramaIntensity'], additionalProperties: false
+        },
+        story: {
+          type: 'object', properties: {
+            premise: { type: 'string' }, openingQuestion: { type: 'string' },
+            coreTensions: { type: 'array', minItems: 1, maxItems: 5, items: { type: 'object', properties: { summary: { type: 'string' }, involvedCharacterKeys: { type: 'array', maxItems: 6, items: { type: 'string' } }, pressure: { type: 'integer', minimum: 0, maximum: 100 } }, required: ['summary','involvedCharacterKeys','pressure'], additionalProperties: false } }
+          }, required: ['premise','openingQuestion','coreTensions'], additionalProperties: false
         },
         characters: {
           type: 'array', minItems: 2, maxItems: 6, items: {
@@ -97,7 +156,7 @@ const worldDraftSchema = {
             }, required: ['characterKeys','label','score'], additionalProperties: false
           }
         }
-      }, required: ['world','characters','relationships'], additionalProperties: false
+      }, required: ['world','story','characters','relationships'], additionalProperties: false
     }
   }, required: ['reply','missingItems','draft'], additionalProperties: false
 };
@@ -259,7 +318,7 @@ export async function cleanupCodexThread(threadId) {
   await appServer.cleanupThread(threadId);
 }
 
-async function executeStructured({ prompt, outputSchema, validate, label, runId, thread }) {
+async function executeStructured({ prompt, outputSchema, validate, label, runId, thread, timeoutMs = TIMEOUT_MS }) {
   const appServerStage = startStage(runId, 'app_server_ready');
   const { client, reused } = getAppServer();
   let timer;
@@ -268,7 +327,7 @@ async function executeStructured({ prompt, outputSchema, validate, label, runId,
     endStage(runId, appServerStage, { reused, pid: client.child.pid });
     const turn = await Promise.race([
       client.runTurn(prompt, outputSchema, runId, { ...thread, usage: label }),
-      new Promise((_, reject) => { timer = setTimeout(() => { const error = new Error(`Codex ${label} timed out after ${TIMEOUT_MS / 1000} seconds.`); client.destroy(error); reject(error); }, TIMEOUT_MS); })
+      new Promise((_, reject) => { timer = setTimeout(() => { const error = new Error(`Codex ${label} timed out after ${timeoutMs / 1000} seconds.`); client.destroy(error); reject(error); }, timeoutMs); })
     ]);
     if (turn?.turn?.status !== 'completed') throw new Error(`Codex ${label} failed: ${turn?.turn?.error?.message || turn?.turn?.status || 'unknown error'}`);
     const validationStage = startStage(runId, 'output_validate');
@@ -322,8 +381,42 @@ export function generateCodexTurn(context) {
       result.memory = result.memory.trim();
       if (!Number.isInteger(result.memoryImportance) || result.memoryImportance < 0 || result.memoryImportance > 100) throw new Error('invalid memoryImportance');
       if (!Array.isArray(result.relationshipChanges)) throw new Error('invalid relationshipChanges');
+      result.nextState = cleanCharacterState(result.nextState, context.character.goal);
+      for (const change of result.relationshipChanges) {
+        if (typeof change.label !== 'string' || typeof change.reason !== 'string') throw new Error('invalid relationship change');
+        change.label = change.label.trim().slice(0, 120); change.reason = change.reason.trim().slice(0, 240);
+      }
       if (!['continue', 'stalled', 'complete'].includes(result.sceneSignal)) throw new Error('invalid sceneSignal');
       if (!result.shouldRespond && (result.memory || result.memoryImportance !== 0 || result.relationshipChanges.length || result.sceneSignal !== 'continue')) throw new Error('silent response contains state changes');
+    }
+  });
+}
+
+export function generateDirectorProgressionPlan(state, participants, runId, director) {
+  updateRunMetadata(runId, { activeAgentType: 'director', activeAgentName: '월드 디렉터', activePhase: '진행 계획', activeThreadId: director.activeThreadId || null, activeModel: director.model || CODEX_MODEL, activeEffort: director.reasoningEffort || 'high' });
+  const prompt = buildDirectorProgressionPrompt(state, participants);
+  return runCodexStructured({ prompt, outputSchema: directorProgressionSchema, label: 'World Director · 진행 계획', runId,
+    thread: { threadId: director.activeThreadId, model: director.model || CODEX_MODEL, effort: director.reasoningEffort || 'high', persistent: true },
+    validate: (result) => {
+      if (!DIRECTOR_ACTIONS.has(result.action) || typeof result.rationale !== 'string') throw new Error('invalid Director action');
+      const characterIds = state.characters.map((item) => item.id);
+      result.storyState = cleanStoryState(result.storyState, characterIds, state.storyState);
+      result.sceneState = cleanDramaticState(result.sceneState, characterIds, state.dramaticState);
+      if (!Array.isArray(result.responders) || result.responders.length < 1 || result.responders.length > 2) throw new Error('invalid responders');
+      if (result.action === 'PROPOSE_MAJOR' && (!Array.isArray(result.majorProposals) || result.majorProposals.length < 2 || result.majorProposals.length > 3)) throw new Error('major proposals require 2-3 options');
+    }
+  });
+}
+
+export function generateStoryRepair(context, runId, director) {
+  updateRunMetadata(runId, { activeAgentType: 'director', activeAgentName: '월드 디렉터', activePhase: '이야기 상태 진단', activeThreadId: director.activeThreadId || null, activeModel: director.model || CODEX_MODEL, activeEffort: director.reasoningEffort || 'high' });
+  return runCodexStructured({ prompt: buildStoryRepairPrompt(context), outputSchema: storyRepairSchema, label: 'World Director · 이야기 보정안', runId, timeoutMs: 240000,
+    thread: { threadId: director.activeThreadId, model: director.model || CODEX_MODEL, effort: director.reasoningEffort || 'high', persistent: true },
+    validate: (result) => {
+      const ids = context.state.characters.map((item) => item.id);
+      result.storyState = cleanStoryState(result.storyState, ids, context.state.storyState);
+      result.sceneState = cleanDramaticState(result.sceneState, ids, context.state.dramaticState);
+      if (typeof result.summary !== 'string' || !result.summary.trim()) throw new Error('repair summary is required');
     }
   });
 }

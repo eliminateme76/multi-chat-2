@@ -8,12 +8,7 @@ let directorTab = 'state';
 let typingCharacter = null;
 let consecutiveSilentTurns = 0;
 let eventSuggestions = [];
-let autoEventEnabled = false;
-let autoEventInFlight = false;
-let turnsSinceAutoEvent = 0;
-const AUTO_EVENT_TURN_INTERVAL = 12;
-const EVENT_TYPES = ['일상', '관계', '연락', '선택', '발견', '돌발', '시간 전환', '분위기'];
-let selectedAutoEventTypes = new Set(EVENT_TYPES);
+let storyRepairProposal = null;
 let currentProjectId = new URLSearchParams(window.location.search).get('project');
 let modelCatalog = [];
 let worldDrafts = [];
@@ -82,11 +77,6 @@ function renderTurnControls() {
   autoButton.classList.toggle('is-active', autoEnabled);
   autoButton.setAttribute('aria-pressed', String(autoEnabled));
   $('#auto-state').textContent = autoEnabled ? 'ON' : 'OFF';
-  const autoEventButton = $('#auto-event-button');
-  autoEventButton.classList.toggle('is-active', autoEventEnabled);
-  autoEventButton.disabled = autoEventInFlight;
-  autoEventButton.setAttribute('aria-pressed', String(autoEventEnabled));
-  $('#auto-event-state').textContent = autoEventInFlight ? '생성 중' : autoEventEnabled ? `${turnsSinceAutoEvent}/${AUTO_EVENT_TURN_INTERVAL}` : 'OFF';
 }
 function render() {
   $('#world-title').textContent = state.world.title; $('#scene-number').textContent = String(state.sceneNumber).padStart(2, '0'); $('#scene-location-compact').textContent = state.world.location; $('#scene-location').textContent = state.world.location; $('#scene-description').textContent = state.world.description; $('#scene-time').textContent = state.world.time; $('#scene-mood').textContent = state.world.mood; $('#scene-mood-compact').textContent = state.world.mood; $('#director-note').textContent = state.directorNote; renderTurnControls(); setDirectorTab(directorTab);
@@ -96,23 +86,26 @@ function render() {
   const typingMessage = state.presentationMode === 'chat' && typingCharacter ? `<article class="message typing-message">${avatar(typingCharacter)}<div><div class="message-meta"><span class="message-name">${esc(typingCharacter.name)}</span></div><p class="typing-indicator"><i></i><i></i><i></i><span>입력 중</span></p></div></article>` : '';
   $('#conversation-log').innerHTML = state.logs.map((log, index) => { const latest = index === state.logs.length - 1 ? ' latest-message' : ''; if (log.type === 'event') return `<div class="message event${latest}"><strong>DIRECTOR EVENT · ${esc(log.eventType || '일반')}</strong>${esc(log.text)}</div>`; const c = characterById(log.characterId); return `<article class="message${latest}">${avatar(c)}<div><div class="message-meta"><span class="message-name">${esc(c.name)}</span><span class="message-role">${esc(c.gender)} · ${esc(c.role)}</span></div><p class="message-text">${esc(log.text)}</p>${log.action ? `<p class="message-action">${esc(log.action)}</p>` : ''}</div></article>`; }).join('') + typingMessage;
   const log = $('#conversation-log'); log.scrollTop = log.scrollHeight;
-  $('#state-list').innerHTML = `<div><dt>TIME</dt><dd>${esc(state.world.time)}</dd></div><div><dt>SCENE STATUS</dt><dd>${esc(state.sceneSignal || 'continue')}</dd></div><div><dt>CURRENT SITUATION</dt><dd>${esc(state.world.description)}</dd></div><div><dt>WORLD RULES</dt><dd>${esc(state.world.rules || '설정된 규칙 없음')}</dd></div>`;
+  const status = state.storyStatus || {};
+  const intensityLabel = { gentle: '잔잔하게', balanced: '균형 있게', high: '강하게' }[status.intensity] || '균형 있게';
+  const tensions = (status.activeTensions || []).map((item) => `${esc(item.summary)} · ${Number(item.pressure || 0)}`).join('<br>') || '아직 뚜렷한 갈등 없음';
+  $('#state-list').innerHTML = `${state.repairNeeded ? '<button id="open-story-repair" class="story-repair-alert" type="button">기존 기록을 분석해 이야기 상태 만들기 →</button>' : ''}<div><dt>STORY</dt><dd>${esc(intensityLabel)} · 긴장 ${Number(status.tension || 0)} · ${esc(status.arcPhase || 'setup')}</dd></div><div><dt>SCENE OBJECTIVE</dt><dd>${esc(status.objective || state.publicDirection || '현재 선택을 드러냅니다.')}</dd></div><div><dt>ACTIVE TENSIONS</dt><dd>${tensions}</dd></div><div><dt>TIME</dt><dd>${esc(state.world.time)}</dd></div>`;
+  $('#open-story-repair')?.addEventListener('click', openStoryRepair);
   $('#relationship-list').innerHTML = state.relationships.map((r) => `<div class="relationship"><div class="relationship-top"><strong>${esc(characterById(r.from)?.name)} ↔ ${esc(characterById(r.to)?.name)}</strong><span>${r.score}</span></div><span>${esc(r.label)}</span><div class="meter"><i style="width:${r.score}%"></i></div></div>`).join(''); renderSuggestions();
 }
 function renderSuggestions() {
+  const major = state?.pendingMajorDecision;
   const current = eventSuggestions.filter((suggestion) => !suggestion.stale);
   const previous = eventSuggestions.filter((suggestion) => suggestion.stale);
-  const cards = (suggestions) => suggestions.map((suggestion) => `<button class="suggestion ${suggestion.stale ? 'stale' : ''}" data-suggestion-id="${esc(suggestion.id)}"><b>[${esc(suggestion.category)}${suggestion.time ? ` · ${esc(suggestion.time)}` : ''}]</b>${esc(suggestion.text)}</button>`).join('');
-  $('#suggestion-list').innerHTML = eventSuggestions.length
+  const cards = (suggestions) => suggestions.map((suggestion) => `<button class="suggestion ${suggestion.stale ? 'stale' : ''} ${suggestion.severity === 'MAJOR' ? 'major' : ''}" data-suggestion-id="${esc(suggestion.id)}"><b>[${esc(suggestion.category)}${suggestion.time ? ` · ${esc(suggestion.time)}` : ''}]</b>${esc(suggestion.text)}${suggestion.consequence ? `<small>${esc(suggestion.consequence)}</small>` : ''}</button>`).join('');
+  const majorBlock = major ? `<div class="major-decision"><strong>중대 전개를 선택해 주세요</strong><p>선택하기 전에는 자동 진행이 멈춥니다.</p>${cards((major.options || []).map((option) => ({ ...option, severity: 'MAJOR' })))}<button class="secondary-button" id="reject-major-options" type="button">모두 보류</button></div>` : '';
+  $('#suggestion-list').innerHTML = majorBlock || (eventSuggestions.length
     ? `${current.length ? `<div class="suggestion-group"><span>현재 장면 추천</span>${cards(current)}</div>` : ''}${previous.length ? `<div class="suggestion-group previous"><span>이전 장면 추천 · 현재 문맥으로 재검토</span>${cards(previous)}</div>` : ''}`
-    : '<span class="suggestion-empty">AI 전개 추천을 누르면 현재 대화에 맞는 사건 10개를 제안합니다.</span>';
+    : '<span class="suggestion-empty">AI 전개 추천을 누르면 현재 대화에 맞는 사건 10개를 제안합니다.</span>');
   document.querySelectorAll('[data-suggestion-id]').forEach((button) => { button.onclick = () => applySuggestion(button.dataset.suggestionId); });
+  $('#reject-major-options')?.addEventListener('click', rejectMajorOptions);
 }
 function renderEventTimeInput() { const input = $('#event-time-input'); const isTransition = $('#event-type-select').value === '시간 전환'; input.hidden = !isTransition; input.required = isTransition; if (!isTransition) input.value = ''; }
-function renderEventTypeFilters() {
-  $('#event-type-filters').innerHTML = EVENT_TYPES.map((type) => `<label class="event-type-chip"><input type="checkbox" value="${esc(type)}" ${selectedAutoEventTypes.has(type) ? 'checked' : ''}><span>${esc(type)}</span></label>`).join('');
-  $('#event-type-filters').querySelectorAll('input').forEach((input) => { input.onchange = () => { if (input.checked) selectedAutoEventTypes.add(input.value); else selectedAutoEventTypes.delete(input.value); if (!selectedAutoEventTypes.size) { input.checked = true; selectedAutoEventTypes.add(input.value); } }; });
-}
 function stopAutoProgress() { autoEnabled = false; if (autoTimer) clearTimeout(autoTimer); autoTimer = null; }
 function scheduleAutoTurn(delay = 1000) {
   if (!autoEnabled) return;
@@ -150,17 +143,17 @@ async function advanceTurn() {
     typingCharacter = null;
     setState(nextState);
     const messagesCreated = Number(operation.result?.messagesCreated || 0);
-    if (messagesCreated > 0) {
-      consecutiveSilentTurns = 0;
-      turnsSinceAutoEvent += messagesCreated;
-    } else {
+    if (messagesCreated > 0) consecutiveSilentTurns = 0;
+    else {
       consecutiveSilentTurns += 1;
       $('#save-status').textContent = '이번 진행에서는 새 메시지가 없었습니다.';
     }
-    const eventInjected = await maybeInjectAutomaticEvent();
-    if (nextState.conversationSettled && !eventInjected) {
+    if (operation.result?.awaitingDecision || nextState.pendingMajorDecision) {
+      stopAutoProgress(); setDirectorTab('events'); setToolsOpen(true);
+      $('#save-status').textContent = '중대 전개 선택 대기 중';
+    } else if (nextState.conversationSettled) {
       stopAutoProgress();
-      $('#save-status').textContent = autoEventEnabled ? '모두 대화 종료 · 자동 사건을 기다림' : '모두 대화 종료 · 자동 진행 멈춤';
+      $('#save-status').textContent = '현재 대화 종료 · Director가 다음 진행을 판단합니다.';
     }
     return true;
   } catch (error) {
@@ -184,36 +177,24 @@ async function refreshEventSuggestions() { eventSuggestions = (await api('/api/e
 async function addEvent(text, time = '', { automatic = false, eventType = '일반' } = {}) {
   if (!text.trim()) return false;
   if (turnInFlight && !automatic) { pendingEventAction = () => addEvent(text, time, { automatic, eventType }); $('#save-status').textContent = '현재 응답 뒤에 사건 투입 대기 중…'; return true; }
-  try { setState(await api('/api/events', { method: 'POST', body: JSON.stringify({ text, time, eventType }) })); await refreshEventSuggestions(); setToolsOpen(false); turnsSinceAutoEvent = 0; if (!turnInFlight) await advanceTurn(); return true; } catch (error) { if (automatic) throw error; alert(error.message); return false; }
+  try { setState(await api('/api/events', { method: 'POST', body: JSON.stringify({ text, time, eventType }) })); await refreshEventSuggestions(); setToolsOpen(false); if (!turnInFlight) await advanceTurn(); return true; } catch (error) { if (automatic) throw error; alert(error.message); return false; }
 }
 async function applySuggestion(suggestionId, { automatic = false } = {}) {
   if (turnInFlight && !automatic) { pendingEventAction = () => applySuggestion(suggestionId, { automatic }); $('#save-status').textContent = '현재 응답 뒤에 사건 투입 대기 중…'; return true; }
-  try { setState(await api(`/api/events/suggestions/${suggestionId}/apply`, { method: 'POST', body: JSON.stringify({ automatic }) })); await refreshEventSuggestions(); setToolsOpen(false); turnsSinceAutoEvent = 0; if (!turnInFlight) await advanceTurn(); return true; } catch (error) { if (automatic) throw error; alert(error.message); return false; }
+  try { setState(await api(`/api/events/suggestions/${suggestionId}/apply`, { method: 'POST', body: JSON.stringify({ automatic }) })); await refreshEventSuggestions(); setToolsOpen(false); if (!turnInFlight) await advanceTurn(); return true; } catch (error) { if (automatic) throw error; alert(error.message); return false; }
 }
-async function maybeInjectAutomaticEvent() {
-  if (!autoEventEnabled || autoEventInFlight) return false;
-  const settled = Boolean(state?.conversationSettled);
-  const desiredTypes = [...selectedAutoEventTypes].filter((type) => type !== '시간 전환' || settled);
-  const dueByMessages = turnsSinceAutoEvent >= AUTO_EVENT_TURN_INTERVAL;
-  const dueBySettlement = settled && selectedAutoEventTypes.has('시간 전환');
-  if ((!dueByMessages && !dueBySettlement) || !desiredTypes.length) return false;
-  autoEventInFlight = true; $('#save-status').textContent = '자동 사건 생성 중…'; renderTurnControls();
-  try {
-    const response = await api('/api/events/suggest', { method: 'POST', body: JSON.stringify({ desiredTypes }) });
-    const suggestions = response.generatedSuggestions || response.suggestions;
-    const eligible = suggestions.filter((suggestion) => selectedAutoEventTypes.has(suggestion.category));
-    if (!eligible.length) throw new Error('선택한 방향에 맞는 사건이 생성되지 않았습니다.');
-    const suggestion = eligible[Math.floor(Math.random() * eligible.length)];
-    await applySuggestion(suggestion.id, { automatic: true });
-    $('#save-status').textContent = `자동 사건 투입됨 · ${suggestion.category}`;
-    return true;
-  } catch (error) {
-    autoEventEnabled = false;
-    $('#save-status').textContent = '자동 사건 실패';
-    alert(`자동 사건 투입을 중지했습니다.\n${error.message}`);
-  } finally { autoEventInFlight = false; renderTurnControls(); }
-  return false;
+async function rejectMajorOptions() { if (!state.pendingMajorDecision) return; try { stopAutoProgress(); setState(await api(`/api/events/suggestion-batches/${state.pendingMajorDecision.batchId}/reject`, { method: 'POST', body: '{}' })); await refreshEventSuggestions(); } catch (error) { alert(error.message); } }
+function renderStoryRepairProposal() {
+  const content = $('#story-repair-content');
+  if (!storyRepairProposal) { content.innerHTML = '<p>기존 대화·사건·기억을 읽어 현재 갈등, 인물 상태와 관계를 복원합니다. 기존 기록은 바꾸지 않습니다.</p><button id="generate-story-repair" class="primary-button" type="button">Codex로 보정안 생성</button>'; $('#apply-story-repair').hidden = true; $('#reject-story-repair').hidden = true; $('#generate-story-repair').onclick = generateStoryRepair; return; }
+  const proposal = storyRepairProposal.proposal;
+  const names = new Map(state.characters.map((character) => [character.id, character.name]));
+  content.innerHTML = `<p class="repair-summary">${esc(proposal.summary)}</p><dl class="repair-preview"><div><dt>현재 갈등</dt><dd>${(proposal.storyState.activeTensions || []).map((item) => `${esc(item.summary)} · ${item.pressure}`).join('<br>') || '없음'}</dd></div><div><dt>장면 목표</dt><dd>${esc(proposal.sceneState.objective)}</dd></div><div><dt>참여자</dt><dd>${proposal.participantIds.map((id) => esc(names.get(id) || id)).join(', ')}</dd></div><div><dt>관계 보정</dt><dd>${proposal.relationships.map((item) => `${esc(names.get(item.from) || '')} → ${esc(names.get(item.to) || '')}: ${esc(item.label)} (${item.score})`).join('<br>')}</dd></div></dl>`;
+  $('#apply-story-repair').hidden = false; $('#reject-story-repair').hidden = false;
 }
+async function openStoryRepair() { storyRepairProposal = (await api('/api/story-repair')).proposal; renderStoryRepairProposal(); $('#story-repair-modal').showModal(); }
+async function generateStoryRepair() { const button = $('#generate-story-repair'); button.disabled = true; button.textContent = '기록 분석 중…'; try { storyRepairProposal = (await api('/api/story-repair', { method: 'POST', body: '{}' })).proposal; renderStoryRepairProposal(); } catch (error) { alert(error.message); button.disabled = false; button.textContent = 'Codex로 보정안 생성'; } }
+async function decideStoryRepair(decision) { if (!storyRepairProposal) return; try { const result = await api(`/api/story-repair/${storyRepairProposal.id}/${decision}`, { method: 'POST', body: '{}' }); $('#story-repair-modal').close(); storyRepairProposal = null; if (result.state) setState(result.state); else setState(await api('/api/state')); } catch (error) { alert(error.message); } }
 function openCharacterModal(id) { editingId = id || null; const c = id ? characterById(id) : {}; const form = $('#character-form'); $('#character-modal-title').textContent = id ? `${c.name} Agent 편집` : '새 캐릭터 만들기'; for (const key of ['name', 'gender', 'role', 'personality', 'speechStyle', 'goal', 'secret']) form.elements[key].value = c[key] || (key === 'gender' ? '여성' : ''); wireRuntimeSelects(form, { modelOverride: c.modelOverride || '', reasoningEffortOverride: c.reasoningEffortOverride || '' }); $('#character-modal').showModal(); }
 async function saveCharacter() { const form = $('#character-form'); if (!form.reportValidity()) return; try { setState(await api(editingId ? `/api/characters/${editingId}` : '/api/characters', { method: editingId ? 'PUT' : 'POST', body: JSON.stringify(Object.fromEntries(new FormData(form))) })); $('#character-modal').close(); } catch (error) { alert(error.message); } }
 function openWorldModal() { const form = $('#world-form'); Object.entries(state.world).forEach(([key, value]) => { form.elements[key].value = value; }); wireRuntimeSelects(form, { characterModel: state.aiSettings.character.model, characterEffort: state.aiSettings.character.reasoningEffort, directorModel: state.aiSettings.director.model, directorEffort: state.aiSettings.director.reasoningEffort, utilityModel: state.aiSettings.utility.model, utilityEffort: state.aiSettings.utility.reasoningEffort }); $('#world-modal').showModal(); }
@@ -374,7 +355,8 @@ function renderWorldDraft() {
     : '<div class="world-builder-empty"><strong>만들고 싶은 세계를 편하게 이야기해 주세요.</strong><br>장르, 분위기, 등장인물 또는 시작 상황 중 생각난 것만 말해도 나머지는 설계자가 초안으로 채워드립니다.</div>';
   const log = $('#world-builder-messages'); log.scrollTop = log.scrollHeight;
   const world = draft?.world || {};
-  $('#world-draft-world').innerHTML = `<label>세계 이름<input name="title" maxlength="50" value="${esc(world.title || '')}"></label><label>진행 방식<select name="presentationMode"><option value="scene" ${world.presentationMode !== 'chat' ? 'selected' : ''}>STORY</option><option value="chat" ${world.presentationMode === 'chat' ? 'selected' : ''}>CHAT</option></select></label><label>첫 장소<input name="location" maxlength="70" value="${esc(world.location || '')}"></label><label>첫 시간<input name="time" maxlength="40" value="${esc(world.time || '')}"></label><label class="full">분위기<input name="mood" maxlength="70" value="${esc(world.mood || '')}"></label><label class="full">첫 장면 설명<textarea name="description" maxlength="300">${esc(world.description || '')}</textarea></label><label class="full">세계 규칙<textarea name="rules" maxlength="300">${esc(world.rules || '')}</textarea></label>`;
+  const story = draft?.story || {};
+  $('#world-draft-world').innerHTML = `<label>세계 이름<input name="title" maxlength="50" value="${esc(world.title || '')}"></label><label>진행 방식<select name="presentationMode"><option value="scene" ${world.presentationMode !== 'chat' ? 'selected' : ''}>STORY</option><option value="chat" ${world.presentationMode === 'chat' ? 'selected' : ''}>CHAT</option></select></label><label>극적 강도<select name="dramaIntensity"><option value="gentle" ${world.dramaIntensity === 'gentle' ? 'selected' : ''}>잔잔하게</option><option value="balanced" ${world.dramaIntensity !== 'gentle' && world.dramaIntensity !== 'high' ? 'selected' : ''}>균형 있게</option><option value="high" ${world.dramaIntensity === 'high' ? 'selected' : ''}>강하게</option></select></label><label>첫 장소<input name="location" maxlength="70" value="${esc(world.location || '')}"></label><label>첫 시간<input name="time" maxlength="40" value="${esc(world.time || '')}"></label><label class="full">분위기<input name="mood" maxlength="70" value="${esc(world.mood || '')}"></label><label class="full">이야기 전제<textarea name="premise" maxlength="300">${esc(story.premise || '')}</textarea></label><label class="full">첫 미해결 질문<input name="openingQuestion" maxlength="240" value="${esc(story.openingQuestion || '')}"></label><label class="full">첫 장면 설명<textarea name="description" maxlength="300">${esc(world.description || '')}</textarea></label><label class="full">세계 규칙<textarea name="rules" maxlength="300">${esc(world.rules || '')}</textarea></label>`;
   $('#world-draft-characters').innerHTML = draft?.characters?.length
     ? draft.characters.map((character, index) => `<article class="world-draft-character" data-draft-character="${index}" data-key="${esc(character.key)}"><label>표식<input data-field="emoji" maxlength="8" value="${esc(character.emoji)}"></label><label>이름<input data-field="name" maxlength="20" value="${esc(character.name)}"></label><label>성별<select data-field="gender">${['여성','남성','논바이너리','성별 없음'].map((gender) => `<option ${character.gender === gender ? 'selected' : ''}>${gender}</option>`).join('')}</select></label><label class="wide">역할<input data-field="role" maxlength="40" value="${esc(character.role)}"></label><label>색상<input data-field="color" maxlength="7" value="${esc(character.color)}"></label><span class="character-key full">KEY · ${esc(character.key)}</span><label class="full">성격<input data-field="personality" maxlength="120" value="${esc(character.personality)}"></label><label class="full">말투<input data-field="speechStyle" maxlength="120" value="${esc(character.speechStyle)}"></label><label class="full">목표<textarea data-field="goal" maxlength="120">${esc(character.goal)}</textarea></label><label class="full">비밀<textarea data-field="secret" maxlength="120">${esc(character.secret)}</textarea></label><label class="full">초기 감정<input data-field="emotion" maxlength="80" value="${esc(character.emotion)}"></label></article>`).join('')
     : '<div class="world-draft-none">첫 요청을 보내면 캐릭터 초안이 여기에 나타납니다.</div>';
@@ -393,13 +375,15 @@ function renderWorldDraft() {
 
 function collectWorldDraft() {
   const form = $('#world-draft-form');
-  const world = Object.fromEntries(['title','location','mood','time','description','rules','presentationMode'].map((name) => [name, form.elements[name]?.value || '']));
+  const world = Object.fromEntries(['title','location','mood','time','description','rules','presentationMode','dramaIntensity'].map((name) => [name, form.elements[name]?.value || '']));
   const characters = [...form.querySelectorAll('[data-draft-character]')].map((card) => ({
     key: card.dataset.key,
     ...Object.fromEntries(['name','gender','role','emoji','color','personality','speechStyle','goal','secret','emotion'].map((field) => [field, card.querySelector(`[data-field="${field}"]`).value]))
   }));
   const relationships = [...form.querySelectorAll('[data-draft-relationship]')].map((card) => ({ characterKeys: [card.dataset.first, card.dataset.second], label: card.querySelector('[data-field="label"]').value, score: Number(card.querySelector('[data-field="score"]').value) }));
-  return { world, characters, relationships, missingItems: activeWorldDraft?.draft?.missingItems || [] };
+  const previousTensions = activeWorldDraft?.draft?.story?.coreTensions || [];
+  const story = { premise: form.elements.premise?.value || world.description, openingQuestion: form.elements.openingQuestion?.value || '', coreTensions: previousTensions.length ? previousTensions : [{ summary: world.description, involvedCharacterKeys: characters.map((character) => character.key), pressure: 40 }] };
+  return { world, story, characters, relationships, missingItems: activeWorldDraft?.draft?.missingItems || [] };
 }
 
 async function loadWorldDrafts(selectedId = activeWorldDraft?.id) {
@@ -456,7 +440,7 @@ async function createWorldFromActiveDraft() {
     const result = await api(`/api/world-drafts/${activeWorldDraft.id}/create`, { method: 'POST', body: '{}' });
     stopAutoProgress(); currentProjectId = result.projectId;
     await loadProjectOptions(currentProjectId); setState(result.state);
-    eventSuggestions = []; turnsSinceAutoEvent = 0; renderSuggestions();
+    eventSuggestions = []; renderSuggestions();
     const url = new URL(window.location.href); url.searchParams.set('project', currentProjectId); window.history.replaceState({}, '', url);
     $('#world-builder-modal').close();
   } catch (error) { alert(`월드를 생성하지 못했습니다.\n${error.message}`); }
@@ -484,7 +468,7 @@ async function resetCurrentPlaythrough() {
   try {
     $('#save-status').textContent = '현재 진행 초기화 중…';
     setState(await api('/api/projects/reset', { method: 'POST', body: '{}' }));
-    eventSuggestions = []; turnsSinceAutoEvent = 0; renderSuggestions();
+    eventSuggestions = []; renderSuggestions();
     $('#world-modal').close();
   } catch (error) { $('#save-status').textContent = '초기화 실패'; alert(error.message); }
 }
@@ -498,7 +482,7 @@ async function cloneCurrentPlaythrough() {
     currentProjectId = result.projectId;
     await loadProjectOptions(currentProjectId);
     setState(result.state);
-    eventSuggestions = []; turnsSinceAutoEvent = 0; renderSuggestions();
+    eventSuggestions = []; renderSuggestions();
     $('#world-modal').close();
     const url = new URL(window.location.href); url.searchParams.set('project', currentProjectId); window.history.replaceState({}, '', url);
   } catch (error) { $('#save-status').textContent = '새 진행 생성 실패'; alert(error.message); }
@@ -506,7 +490,6 @@ async function cloneCurrentPlaythrough() {
 
 $('#advance-button').onclick = advanceTurn;
 $('#auto-button').onclick = () => { if (autoEnabled) stopAutoProgress(); else { autoEnabled = true; scheduleAutoTurn(0); } renderTurnControls(); };
-$('#auto-event-button').onclick = () => { autoEventEnabled = !autoEventEnabled; if (!autoEventEnabled) turnsSinceAutoEvent = 0; renderTurnControls(); };
 $('#open-character-modal').onclick = () => openCharacterModal(); $('#open-world-modal').onclick = openWorldModal;
 $('#open-runtime-settings').onclick = openRuntimeSettings;
 $('#open-world-builder').onclick = openWorldBuilder;
@@ -528,6 +511,8 @@ $('#character-form').onsubmit = (event) => { event.preventDefault(); saveCharact
 $('#reset-playthrough-button').onclick = resetCurrentPlaythrough;
 $('#clone-playthrough-button').onclick = cloneCurrentPlaythrough;
 $('#save-ai-settings-button').onclick = saveAiSettings;
+$('#apply-story-repair').onclick = () => decideStoryRepair('apply');
+$('#reject-story-repair').onclick = () => decideStoryRepair('reject');
 $('#runtime-settings-form').onsubmit = saveRuntimeSettings;
 $('#world-builder-chat-form').onsubmit = sendWorldDraftMessage;
 $('#new-world-draft').onclick = newWorldDraft;
@@ -555,7 +540,6 @@ $('#reset-button').style.display = 'none';
 async function selectProject(projectId) {
   stopAutoProgress();
   eventSuggestions = [];
-  turnsSinceAutoEvent = 0;
   currentProjectId = projectId;
   const url = new URL(window.location.href);
   url.searchParams.set('project', projectId);
@@ -577,5 +561,4 @@ async function initialize() {
   }
 }
 initialize();
-renderEventTypeFilters();
 renderEventTimeInput();

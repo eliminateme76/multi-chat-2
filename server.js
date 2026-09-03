@@ -8,10 +8,11 @@ import { generateCharacterSuggestion, generateCodexTurn, listCodexModels } from 
 import { appendSceneEvent, buildTurnContext, getActiveParticipants, getStoryState, persistGeneratedTurn } from './story-engine.js';
 import { endStage, failRun, failStage, finishRun, snapshot, startRun, startStage, subscribe } from './runtime-telemetry.js';
 import { enqueueProgression, getOperation, resumeQueuedOperations } from './progression-runner.js';
-import { applyDirectorEvent, createDirectorSuggestions, listEventSuggestions } from './director-engine.js';
+import { applyDirectorEvent, createDirectorSuggestions, listEventSuggestions, rejectMajorSuggestions } from './director-engine.js';
 import { clonePlaythrough, resetPlaythrough } from './project-lifecycle.js';
 import { cancelWorldDraft, converseWorldDraft, createWorldFromDraft, getWorldDraft, listWorldDrafts, saveWorldDraft, startWorldDraft } from './world-builder.js';
 import { getRuntimeSettings, updateRuntimeSettings } from './runtime-settings.js';
+import { createStoryRepairProposal, decideStoryRepair, getPendingStoryRepair } from './story-repair.js';
 
 if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required. Copy .env.example to .env.');
 const { Pool } = pg;
@@ -23,6 +24,7 @@ const root = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PROJECT_ID = '00000000-0000-4000-8000-000000000001';
 const EVENT_TYPES = new Set(['일상', '관계', '연락', '선택', '발견', '돌발', '시간 전환', '분위기', '일반']);
 const REASONING_EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
+const DRAMA_INTENSITIES = new Set(['gentle', 'balanced', 'high']);
 app.use(express.json());
 app.use(express.static(root));
 
@@ -147,6 +149,29 @@ app.get('/api/state', async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+app.get('/api/story-repair', async (req, res, next) => {
+  try { res.json({ proposal: await getPendingStoryRepair(pool, projectIdFrom(req)) }); } catch (error) { next(error); }
+});
+
+app.post('/api/story-repair', async (req, res, next) => {
+  let runId;
+  try {
+    const projectId = projectIdFrom(req);
+    runId = startRun({ type: 'story_repair', projectId });
+    const proposal = await createStoryRepairProposal(pool, projectId, runId);
+    finishRun(runId, { proposalId: proposal.id, sourceWorldSequence: proposal.sourceWorldSequence });
+    res.status(201).json({ proposal });
+  } catch (error) { failRun(runId, error); next(error); }
+});
+
+app.post('/api/story-repair/:id/apply', async (req, res, next) => {
+  try { res.json(await decideStoryRepair(pool, projectIdFrom(req), req.params.id, 'APPLY')); } catch (error) { next(error); }
+});
+
+app.post('/api/story-repair/:id/reject', async (req, res, next) => {
+  try { res.json(await decideStoryRepair(pool, projectIdFrom(req), req.params.id, 'REJECT')); } catch (error) { next(error); }
+});
+
 app.get('/api/runtime/settings', async (req, res, next) => {
   try {
     const settings = await getRuntimeSettings(pool, projectIdFrom(req));
@@ -206,9 +231,10 @@ app.put('/api/world', async (req, res, next) => {
   const client = await pool.connect();
   try {
     const projectId = projectIdFrom(req); const world = req.body;
-    const values = [projectId, required(world.title, 'title'), required(world.location, 'location'), required(world.mood, 'mood'), required(world.time, 'time'), required(world.description, 'description'), typeof world.rules === 'string' ? world.rules.trim() : ''];
+    const intensity = DRAMA_INTENSITIES.has(world.dramaIntensity) ? world.dramaIntensity : 'balanced';
+    const values = [projectId, required(world.title, 'title'), required(world.location, 'location'), required(world.mood, 'mood'), required(world.time, 'time'), required(world.description, 'description'), typeof world.rules === 'string' ? world.rules.trim() : '', intensity];
     await client.query('BEGIN');
-    await client.query('UPDATE projects SET title=$2,location=$3,mood=$4,scene_time=$5,description=$6,rules=$7,updated_at=NOW() WHERE id=$1', values);
+    await client.query('UPDATE projects SET title=$2,location=$3,mood=$4,scene_time=$5,description=$6,rules=$7,drama_intensity=$8,updated_at=NOW() WHERE id=$1', values);
     await client.query("UPDATE scenes SET location=$2,mood=$3,scene_time=$4,description=$5,updated_at=NOW() WHERE project_id=$1 AND status='active'", [projectId, values[2], values[3], values[4], values[5]]);
     await client.query('COMMIT');
     res.json(await getStoryState(client, projectId));
@@ -289,6 +315,10 @@ app.post('/api/events/suggestions/:id/apply', async (req, res, next) => {
     finishRun(runId, { suggestionId: req.params.id, sceneCreated: Boolean(result.outcome.sceneId) });
     res.json(result.state);
   } catch (error) { failRun(runId, error); next(error); }
+});
+
+app.post('/api/events/suggestion-batches/:id/reject', async (req, res, next) => {
+  try { res.json(await rejectMajorSuggestions(pool, projectIdFrom(req), req.params.id)); } catch (error) { next(error); }
 });
 
 app.post('/api/messages', async (req, res, next) => {

@@ -3,11 +3,13 @@ import { cleanupCodexThread, generateWorldDraft } from './codex-client.js';
 
 const GENDERS = new Set(['여성', '남성', '논바이너리', '성별 없음']);
 const MODES = new Set(['scene', 'chat']);
+const INTENSITIES = new Set(['gentle', 'balanced', 'high']);
 const HEX_COLOR = /^#[0-9a-f]{6}$/i;
 const KEY = /^[a-z][a-z0-9_-]{0,31}$/;
 
 const emptyDraft = () => ({
-  world: { title: '', location: '', mood: '', time: '', description: '', rules: '', presentationMode: 'scene' },
+  world: { title: '', location: '', mood: '', time: '', description: '', rules: '', presentationMode: 'scene', dramaIntensity: 'balanced' },
+  story: { premise: '', openingQuestion: '', coreTensions: [] },
   characters: [], relationships: [], missingItems: []
 });
 
@@ -25,6 +27,7 @@ export function validateWorldDraft(input) {
   if (!sourceWorld || typeof sourceWorld !== 'object') throw new Error('월드 설정이 필요합니다.');
   const presentationMode = cleanString(sourceWorld.presentationMode, 'presentationMode', 10);
   if (!MODES.has(presentationMode)) throw new Error('presentationMode must be scene or chat.');
+  const dramaIntensity = INTENSITIES.has(sourceWorld.dramaIntensity) ? sourceWorld.dramaIntensity : 'balanced';
   const world = {
     title: cleanString(sourceWorld.title, '세계 이름', 50),
     location: cleanString(sourceWorld.location, '첫 장소', 70),
@@ -32,7 +35,7 @@ export function validateWorldDraft(input) {
     time: cleanString(sourceWorld.time, '첫 시간', 40),
     description: cleanString(sourceWorld.description, '첫 장면 설명', 300),
     rules: cleanString(sourceWorld.rules ?? '', '세계 규칙', 300, { required: false }),
-    presentationMode
+    presentationMode, dramaIntensity
   };
   if (!Array.isArray(input.characters) || input.characters.length < 2 || input.characters.length > 6) throw new Error('캐릭터는 2명에서 6명까지 필요합니다.');
   const keys = new Set(); const names = new Set();
@@ -72,7 +75,18 @@ export function validateWorldDraft(input) {
     return { characterKeys, label: cleanString(source.label, `관계 ${index + 1} 설명`, 120), score: source.score };
   });
   const missingItems = Array.isArray(input.missingItems) ? input.missingItems.slice(0, 6).map((item) => cleanString(item, '추가 확인 항목', 120)) : [];
-  return { world, characters, relationships, missingItems };
+  const sourceStory = input.story && typeof input.story === 'object' ? input.story : {};
+  const story = {
+    premise: cleanString(sourceStory.premise || world.description, '이야기 전제', 300),
+    openingQuestion: cleanString(sourceStory.openingQuestion || '이 인물들은 첫 선택에서 무엇을 감수할 것인가?', '첫 미해결 질문', 240),
+    coreTensions: (Array.isArray(sourceStory.coreTensions) ? sourceStory.coreTensions : [{ summary: world.description, involvedCharacterKeys: [...keys], pressure: 40 }]).slice(0, 5).map((item, index) => ({
+      summary: cleanString(item?.summary, `핵심 긴장 ${index + 1}`, 240),
+      involvedCharacterKeys: [...new Set((Array.isArray(item?.involvedCharacterKeys) ? item.involvedCharacterKeys : []).filter((key) => keys.has(key)))].slice(0, 6),
+      pressure: Number.isInteger(item?.pressure) ? Math.max(0, Math.min(100, item.pressure)) : 40
+    }))
+  };
+  if (!story.coreTensions.length) throw new Error('핵심 긴장이 최소 하나 필요합니다.');
+  return { world, story, characters, relationships, missingItems };
 }
 
 function mapDraft(row, messages = []) {
@@ -156,21 +170,28 @@ export async function createWorldFromDraft(pool, draftId) {
     const draft = validateWorldDraft(row.draft_data);
     const projectId = randomUUID(); const sceneId = randomUUID(); const ids = new Map();
     const world = draft.world;
-    await client.query(`INSERT INTO projects(id,title,location,mood,scene_time,description,rules,public_direction,private_director_state,default_model,default_reasoning_effort,director_model,director_reasoning_effort,utility_model,utility_reasoning_effort,attribute_schema,next_event_sequence,initial_world)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,'인물들이 현재 상황에서 자연스럽게 이야기를 시작합니다.','',$8,$9,$10,$11,$12,$13,$14,1,$15)`,
-    [projectId,world.title,world.location,world.mood,world.time,world.description,world.rules,row.default_model,row.default_reasoning_effort,row.director_model,row.director_reasoning_effort,row.utility_model,row.utility_reasoning_effort,row.attribute_schema,JSON.stringify(world)]);
+    const initialStoryState = { version: 1, arcPhase: 'setup', tension: Math.round(draft.story.coreTensions.reduce((sum, item) => sum + item.pressure, 0) / draft.story.coreTensions.length), pacing: 'steady', activeTensions: [], openQuestions: [], recentBeats: [], lastDirectorSequence: 0 };
     for (const [index, character] of draft.characters.entries()) {
       const id = randomUUID(); ids.set(character.key, id);
       const profile = { name: character.name, role: character.role, gender: character.gender, personality: character.personality, speechStyle: character.speechStyle, goal: character.goal, secret: character.secret, emotion: character.emotion };
-      await client.query(`INSERT INTO characters(id,project_id,name,role,gender,emoji,color,personality,speech_style,goal,secret,emotion,sort_order,initial_profile,current_state)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'{}'::jsonb)`, [id,projectId,character.name,character.role,character.gender,character.emoji,character.color,character.personality,character.speechStyle,character.goal,character.secret,character.emotion,index,JSON.stringify(profile)]);
+      const currentState = { currentGoal: character.goal, internalConflict: '', beliefs: [], commitments: [], developmentNotes: [], lastChangedSequence: 0 };
+      character.currentState = currentState;
+      character.generatedId = id;
     }
+    initialStoryState.activeTensions = draft.story.coreTensions.map((item) => ({ id: randomUUID(), summary: item.summary, involvedCharacterIds: item.involvedCharacterKeys.map((key) => ids.get(key)).filter(Boolean), pressure: item.pressure, introducedAtSequence: 0 }));
+    initialStoryState.openQuestions = [{ id: randomUUID(), text: draft.story.openingQuestion, involvedCharacterIds: [...ids.values()], urgency: 45, introducedAtSequence: 0 }];
+    const initialDramaticState = { objective: draft.story.openingQuestion, stakes: draft.story.premise, dilemma: draft.story.coreTensions[0].summary, beatType: 'choice', targetTension: initialStoryState.tension, participantIds: [...ids.values()] };
+    await client.query(`INSERT INTO projects(id,title,location,mood,scene_time,description,rules,public_direction,private_director_state,default_model,default_reasoning_effort,director_model,director_reasoning_effort,utility_model,utility_reasoning_effort,attribute_schema,next_event_sequence,initial_world,drama_intensity,story_state)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,'인물들이 현재 상황에서 자연스럽게 이야기를 시작합니다.','',$8,$9,$10,$11,$12,$13,$14,1,$15,$16,$17)`,
+    [projectId,world.title,world.location,world.mood,world.time,world.description,world.rules,row.default_model,row.default_reasoning_effort,row.director_model,row.director_reasoning_effort,row.utility_model,row.utility_reasoning_effort,row.attribute_schema,JSON.stringify({ ...world, storyState: initialStoryState, dramaticState: initialDramaticState }),world.dramaIntensity,JSON.stringify(initialStoryState)]);
+    for (const [index, character] of draft.characters.entries()) await client.query(`INSERT INTO characters(id,project_id,name,role,gender,emoji,color,personality,speech_style,goal,secret,emotion,sort_order,initial_profile,current_state)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`, [character.generatedId,projectId,character.name,character.role,character.gender,character.emoji,character.color,character.personality,character.speechStyle,character.goal,character.secret,character.emotion,index,JSON.stringify({ name: character.name, role: character.role, gender: character.gender, personality: character.personality, speechStyle: character.speechStyle, goal: character.goal, secret: character.secret, emotion: character.emotion }),JSON.stringify(character.currentState)]);
     for (const relationship of draft.relationships) {
       const [first, second] = relationship.characterKeys.map((key) => ids.get(key));
       for (const [from, to] of [[first,second],[second,first]]) await client.query(`INSERT INTO relationships(id,project_id,from_character_id,to_character_id,label,score,initial_label,initial_score) VALUES ($1,$2,$3,$4,$5,$6,$5,$6)`, [randomUUID(),projectId,from,to,relationship.label,relationship.score]);
     }
-    await client.query(`INSERT INTO scenes(id,project_id,scene_number,location,mood,scene_time,description,summary,public_direction,private_director_state,presentation_mode)
-      VALUES ($1,$2,1,$3,$4,$5,$6,$6,'인물들이 현재 상황에서 자연스럽게 이야기를 시작합니다.','',$7)`, [sceneId,projectId,world.location,world.mood,world.time,world.description,world.presentationMode]);
+    await client.query(`INSERT INTO scenes(id,project_id,scene_number,location,mood,scene_time,description,summary,public_direction,private_director_state,presentation_mode,dramatic_state)
+      VALUES ($1,$2,1,$3,$4,$5,$6,$6,'인물들이 현재 상황에서 자연스럽게 이야기를 시작합니다.','',$7,$8)`, [sceneId,projectId,world.location,world.mood,world.time,world.description,world.presentationMode,JSON.stringify(initialDramaticState)]);
     await client.query(`INSERT INTO scene_participants(scene_id,character_id,joined_sequence) SELECT $1,id,0 FROM characters WHERE project_id=$2`, [sceneId, projectId]);
     threadId = row.thread_id;
     await client.query(`UPDATE world_creation_drafts SET status='CREATED',created_project_id=$2,thread_id=NULL,updated_at=NOW() WHERE id=$1`, [draftId, projectId]);
