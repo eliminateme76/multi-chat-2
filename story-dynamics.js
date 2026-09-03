@@ -17,7 +17,7 @@ export function emptyStoryState() {
 }
 
 export function emptyDramaticState() {
-  return { objective: '', stakes: '', dilemma: '', beatType: 'reflection', targetTension: 35, participantIds: [], beatIntent: 'build', outcomeConstraint: 'open', pressureSource: '', reliefReason: '' };
+  return { objective: '', stakes: '', dilemma: '', beatType: 'reflection', targetTension: 35, participantIds: [], beatIntent: 'build', outcomeConstraint: 'open', pressureSource: '', reliefReason: '', plannedResponderIds: [], planStartedSequence: 0, responsesConsumed: 0 };
 }
 
 export function emptyRhythmState() {
@@ -77,6 +77,49 @@ export function cleanCharacterState(value = {}, fallbackGoal = '') {
   };
 }
 
+function mergeStringList(current, additions, removals, maxItems, maxLength) {
+  const removed = new Set(strings(removals, maxItems * 2, maxLength));
+  return [...new Set([...strings(current, maxItems, maxLength).filter((item) => !removed.has(item)), ...strings(additions, maxItems, maxLength)])].slice(-maxItems);
+}
+
+export function applyCharacterStatePatch(current, patch = {}, fallbackGoal = '') {
+  const base = cleanCharacterState(current, fallbackGoal);
+  return cleanCharacterState({
+    currentGoal: patch.setCurrentGoal === null || patch.setCurrentGoal === undefined ? base.currentGoal : patch.setCurrentGoal,
+    internalConflict: patch.setInternalConflict === null || patch.setInternalConflict === undefined ? base.internalConflict : patch.setInternalConflict,
+    beliefs: mergeStringList(base.beliefs, patch.addBeliefs, patch.removeBeliefs, 5, 160),
+    commitments: mergeStringList(base.commitments, patch.addCommitments, patch.removeCommitments, 5, 160),
+    developmentNotes: mergeStringList(base.developmentNotes, patch.appendDevelopmentNotes, [], 6, 180),
+    lastChangedSequence: base.lastChangedSequence
+  }, fallbackGoal);
+}
+
+export function applyStoryStatePatch(current, patch = {}, characterIds = [], beatSequence = 0) {
+  const base = cleanStoryState(current, characterIds);
+  const removedTensions = new Set(strings(patch.removeActiveTensionIds, 10, 64));
+  const removedQuestions = new Set(strings(patch.removeOpenQuestionIds, 10, 64));
+  const upsert = (items, updates, removed, textField) => {
+    const byId = new Map(items.filter((item) => !removed.has(item.id)).map((item) => [item.id, item]));
+    for (const item of Array.isArray(updates) ? updates : []) {
+      const id = clean(item?.id, 64) || randomUUID();
+      byId.set(id, { ...(byId.get(id) || {}), ...item, id });
+    }
+    return [...byId.values()].filter((item) => item?.[textField]);
+  };
+  const recentBeat = patch.recentBeat && typeof patch.recentBeat === 'object' && clean(patch.recentBeat.summary, 180)
+    ? { sequence: Math.max(0, Number(beatSequence) || 0), type: BEAT_TYPES.has(patch.recentBeat.type) ? patch.recentBeat.type : 'reflection', summary: clean(patch.recentBeat.summary, 180) }
+    : null;
+  return cleanStoryState({
+    ...base,
+    arcPhase: patch.arcPhase ?? base.arcPhase,
+    tension: patch.tension ?? base.tension,
+    pacing: patch.pacing ?? base.pacing,
+    activeTensions: upsert(base.activeTensions, patch.upsertActiveTensions, removedTensions, 'summary'),
+    openQuestions: upsert(base.openQuestions, patch.upsertOpenQuestions, removedQuestions, 'text'),
+    recentBeats: recentBeat ? [...base.recentBeats, recentBeat] : base.recentBeats
+  }, characterIds, base);
+}
+
 export function cleanStoryState(value = {}, characterIds = [], fallback = {}) {
   const allowed = new Set(characterIds);
   const source = value && typeof value === 'object' ? value : {};
@@ -109,7 +152,10 @@ export function cleanDramaticState(value = {}, characterIds = [], fallback = {})
   const allowed = new Set(characterIds);
   const source = value && typeof value === 'object' ? value : {};
   const base = { ...emptyDramaticState(), ...(fallback && typeof fallback === 'object' ? fallback : {}) };
-  const participantIds = Array.isArray(source.participantIds) ? [...new Set(source.participantIds.filter((id) => validId(id, allowed)))].slice(0, 6) : [];
+  const participantSource = Array.isArray(source.participantIds) ? source.participantIds : base.participantIds;
+  const participantIds = Array.isArray(participantSource) ? [...new Set(participantSource.filter((id) => validId(id, allowed)))].slice(0, 6) : [];
+  const plannedSource = Array.isArray(source.plannedResponderIds) ? source.plannedResponderIds : base.plannedResponderIds;
+  const plannedResponderIds = Array.isArray(plannedSource) ? plannedSource.filter((id) => validId(id, allowed)).slice(0, 2) : [];
   return {
     objective: clean(source.objective, 240, clean(base.objective, 240)),
     stakes: clean(source.stakes, 240, clean(base.stakes, 240)),
@@ -120,7 +166,10 @@ export function cleanDramaticState(value = {}, characterIds = [], fallback = {})
     beatIntent: RHYTHM_PHASES.has(source.beatIntent) ? source.beatIntent : (RHYTHM_PHASES.has(base.beatIntent) ? base.beatIntent : 'build'),
     outcomeConstraint: BEAT_OUTCOMES.has(source.outcomeConstraint) ? source.outcomeConstraint : (BEAT_OUTCOMES.has(base.outcomeConstraint) ? base.outcomeConstraint : 'open'),
     pressureSource: clean(source.pressureSource, 240, clean(base.pressureSource, 240)),
-    reliefReason: clean(source.reliefReason, 240, clean(base.reliefReason, 240))
+    reliefReason: clean(source.reliefReason, 240, clean(base.reliefReason, 240)),
+    plannedResponderIds,
+    planStartedSequence: Math.max(0, Number(source.planStartedSequence ?? base.planStartedSequence) || 0),
+    responsesConsumed: integer(source.responsesConsumed, 0, 2, integer(base.responsesConsumed, 0, 2, 0))
   };
 }
 

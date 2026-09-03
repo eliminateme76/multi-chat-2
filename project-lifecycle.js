@@ -51,12 +51,12 @@ export async function resetPlaythrough(pool, projectId) {
       gender=COALESCE(NULLIF(initial_profile->>'gender',''),gender),personality=COALESCE(NULLIF(initial_profile->>'personality',''),personality),
       speech_style=COALESCE(NULLIF(initial_profile->>'speechStyle',''),speech_style),goal=COALESCE(NULLIF(initial_profile->>'goal',''),goal),
       secret=COALESCE(NULLIF(initial_profile->>'secret',''),secret),emotion=COALESCE(NULLIF(initial_profile->>'emotion',''),'기대'),
-      current_state=jsonb_build_object('currentGoal',COALESCE(NULLIF(initial_profile->>'goal',''),goal),'internalConflict','','beliefs','[]'::jsonb,'commitments','[]'::jsonb,'developmentNotes','[]'::jsonb,'lastChangedSequence',0),active_thread_id=NULL,last_scanned_event_sequence=NULL,pending_operation_step_id=NULL,updated_at=NOW()
+      current_state=jsonb_build_object('currentGoal',COALESCE(NULLIF(initial_profile->>'goal',''),goal),'internalConflict','','beliefs','[]'::jsonb,'commitments','[]'::jsonb,'developmentNotes','[]'::jsonb,'lastChangedSequence',0),active_thread_id=NULL,active_thread_turn_count=0,active_thread_context_tokens=0,thread_rollover_required=FALSE,last_scanned_event_sequence=NULL,pending_operation_step_id=NULL,updated_at=NOW()
       WHERE project_id=$1`, [projectId]);
     await client.query('UPDATE relationships SET label=COALESCE(initial_label,label),score=COALESCE(initial_score,score),updated_at=NOW() WHERE project_id=$1', [projectId]);
     await client.query(`UPDATE projects SET title=$2,location=$3,mood=$4,scene_time=$5,description=$6,rules=$7,
       scene_number=1,turn_number=0,next_event_sequence=1,public_direction='인물들이 현재 상황에서 자연스럽게 대화를 시작합니다.',private_director_state='',
-      active_director_thread_id=NULL,last_director_event_sequence=NULL,drama_intensity=$8,story_state=$9,updated_at=NOW() WHERE id=$1`,
+      active_director_thread_id=NULL,director_thread_turn_count=0,director_thread_context_tokens=0,director_thread_rollover_required=FALSE,last_director_event_sequence=NULL,drama_intensity=$8,story_state=$9,updated_at=NOW() WHERE id=$1`,
     [projectId, world.title, world.location, world.mood, world.time, world.description, world.rules, world.dramaIntensity, JSON.stringify(world.storyState || {})]);
     await insertInitialScene(client, projectId, world);
     await client.query('COMMIT');
@@ -80,7 +80,7 @@ export async function clonePlaythrough(pool, sourceProjectId, requestedTitle = '
       const id = randomUUID(); idMap.set(character.id, id);
       const profile = character.initial_profile || {};
       await client.query(`INSERT INTO characters(id,project_id,origin_character_id,name,role,gender,portrait_url,portrait_position,emoji,color,personality,speech_style,goal,secret,emotion,sort_order,model_override,reasoning_effort_override,initial_profile,current_state)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,jsonb_build_object('currentGoal',$13,'internalConflict','','beliefs','[]'::jsonb,'commitments','[]'::jsonb,'developmentNotes','[]'::jsonb,'lastChangedSequence',0))`,
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,jsonb_build_object('currentGoal',$13::text,'internalConflict','','beliefs','[]'::jsonb,'commitments','[]'::jsonb,'developmentNotes','[]'::jsonb,'lastChangedSequence',0))`,
       [id,targetProjectId,character.id,profile.name||character.name,profile.role||character.role,profile.gender||character.gender,character.portrait_url,character.portrait_position,character.emoji,character.color,profile.personality||character.personality,profile.speechStyle||character.speech_style,profile.goal||character.goal,profile.secret||character.secret,profile.emotion||'기대',character.sort_order,character.model_override,character.reasoning_effort_override,character.initial_profile]);
     }
     const relationships = (await client.query('SELECT * FROM relationships WHERE project_id=$1', [sourceProjectId])).rows;

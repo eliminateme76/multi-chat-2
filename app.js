@@ -130,13 +130,22 @@ async function advanceTurn() {
     render();
     const queued = await api('/api/turns', { method: 'POST' });
     let operation;
+    let completedStepCount = 0;
     for (let attempt = 0; attempt < 240; attempt += 1) {
       operation = await api(`/api/operations/${queued.operationId}`);
       const runningStep = operation.steps?.find((step) => step.status === 'RUNNING');
-      const actualTypingCharacter = runningStep ? participants.find((character) => character.id === runningStep.characterId) || characterById(runningStep.characterId) : null;
+      const actualTypingCharacter = runningStep ? participants.find((character) => character.id === runningStep.characterId) || characterById(runningStep.characterId) || { id: runningStep.characterId, name: runningStep.characterName } : null;
       if (typingCharacter?.id !== actualTypingCharacter?.id) { typingCharacter = actualTypingCharacter; render(); }
+      if (runningStep) $('#save-status').textContent = `${runningStep.characterName} · 응답 생성 중…`;
+      else if (!operation.steps?.length) $('#save-status').textContent = '월드 디렉터 · 진행 계획 중…';
+      const completedNow = operation.steps?.filter((step) => step.status === 'COMPLETED').length || 0;
+      if (completedNow > completedStepCount && operation.status !== 'COMPLETED') {
+        completedStepCount = completedNow;
+        setState(await api('/api/state'));
+        $('#save-status').textContent = '응답 저장 완료 · 진행 마무리 중…';
+      }
       if (operation.status === 'COMPLETED' || operation.status === 'FAILED') break;
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await new Promise((resolve) => setTimeout(resolve, runningStep ? 500 : 1000));
     }
     if (!operation || operation.status !== 'COMPLETED') throw new Error(operation?.error || '진행 작업이 완료되지 않았습니다.');
     const nextState = await api('/api/state');

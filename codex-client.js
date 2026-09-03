@@ -1,23 +1,40 @@
 import { spawn } from 'node:child_process';
+import { mkdirSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { buildCharacterSuggestionPrompt, buildCharacterTurnPrompt, buildDirectorProgressionPrompt, buildEventSuggestionsPrompt, buildDirectorEventApplyPrompt, buildDirectorSceneTransitionPrompt, buildStoryRepairPrompt, buildWorldDraftPrompt } from './context-builder.js';
-import { BEAT_OUTCOMES, DIRECTOR_ACTIONS, RHYTHM_PHASES, TENSION_DIRECTIONS, advanceRhythmState, cleanCharacterState, cleanDramaticState, cleanRhythmState, cleanStoryState, tensionDirection } from './story-dynamics.js';
+import { BEAT_OUTCOMES, DIRECTOR_ACTIONS, RHYTHM_PHASES, TENSION_DIRECTIONS, advanceRhythmState, applyCharacterStatePatch, applyStoryStatePatch, cleanCharacterState, cleanDramaticState, cleanRhythmState, cleanStoryState, tensionDirection } from './story-dynamics.js';
 import { endStage, failStage, recordStage, setRuntimeResource, startStage, updateRunMetadata } from './runtime-telemetry.js';
 
 const CODEX_MODEL = process.env.CODEX_MODEL || 'gpt-5.6-sol';
 const TIMEOUT_MS = Number(process.env.CODEX_TURN_TIMEOUT_MS || 120000);
 const APP_SERVER_CODEX_HOME = process.env.SCENEWEAVER_CODEX_HOME?.trim();
+const AGENT_CWD = process.env.SCENEWEAVER_AGENT_CWD?.trim() || path.join(APP_SERVER_CODEX_HOME || os.tmpdir(), 'workspace');
+const CHARACTER_THREAD_TURN_LIMIT = Number(process.env.CHARACTER_THREAD_TURN_LIMIT || 12);
+const CHARACTER_THREAD_TOKEN_LIMIT = Number(process.env.CHARACTER_THREAD_TOKEN_LIMIT || 50000);
+const DIRECTOR_THREAD_TURN_LIMIT = Number(process.env.DIRECTOR_THREAD_TURN_LIMIT || 8);
+const DIRECTOR_THREAD_TOKEN_LIMIT = Number(process.env.DIRECTOR_THREAD_TOKEN_LIMIT || 80000);
+mkdirSync(AGENT_CWD, { recursive: true, mode: 0o700 });
+
+const shouldRollover = (owner, activeThreadId, turnCount, contextTokens, required) => Boolean(activeThreadId) && (required || Number(turnCount || 0) >= (owner === 'director' ? DIRECTOR_THREAD_TURN_LIMIT : CHARACTER_THREAD_TURN_LIMIT) || Number(contextTokens || 0) >= (owner === 'director' ? DIRECTOR_THREAD_TOKEN_LIMIT : CHARACTER_THREAD_TOKEN_LIMIT));
+
+function directorThreadOptions(director) {
+  const rollover = shouldRollover('director', director.activeThreadId, director.activeThreadTurnCount, director.activeThreadContextTokens, director.threadRolloverRequired);
+  return { threadId: rollover ? null : director.activeThreadId, previousThreadId: rollover ? director.activeThreadId : null, rollover, model: director.model || CODEX_MODEL, effort: director.reasoningEffort || 'high', persistent: true };
+}
 
 const turnSchema = {
   type: 'object',
   properties: {
     shouldRespond: { type: 'boolean' }, silenceReason: { type: 'string' },
     dialogue: { type: 'string' }, action: { type: 'string' }, emotion: { type: 'string' },
-    nextState: {
+    statePatch: {
       type: 'object', properties: {
-        currentGoal: { type: 'string' }, internalConflict: { type: 'string' },
-        beliefs: { type: 'array', maxItems: 5, items: { type: 'string' } }, commitments: { type: 'array', maxItems: 5, items: { type: 'string' } },
-        developmentNotes: { type: 'array', maxItems: 6, items: { type: 'string' } }
-      }, required: ['currentGoal','internalConflict','beliefs','commitments','developmentNotes'], additionalProperties: false
+        setCurrentGoal: { type: ['string','null'] }, setInternalConflict: { type: ['string','null'] },
+        addBeliefs: { type: 'array', maxItems: 3, items: { type: 'string' } }, removeBeliefs: { type: 'array', maxItems: 3, items: { type: 'string' } },
+        addCommitments: { type: 'array', maxItems: 3, items: { type: 'string' } }, removeCommitments: { type: 'array', maxItems: 3, items: { type: 'string' } },
+        appendDevelopmentNotes: { type: 'array', maxItems: 2, items: { type: 'string' } }
+      }, required: ['setCurrentGoal','setInternalConflict','addBeliefs','removeBeliefs','addCommitments','removeCommitments','appendDevelopmentNotes'], additionalProperties: false
     },
     memory: { type: 'string' }, memoryImportance: { type: 'integer', minimum: 0, maximum: 100 },
     relationshipChanges: {
@@ -32,7 +49,7 @@ const turnSchema = {
     conditionOrCost: { type: 'string' },
     sceneSignal: { type: 'string', enum: ['continue', 'stalled', 'complete'] }
   },
-  required: ['shouldRespond', 'silenceReason', 'dialogue', 'action', 'emotion', 'nextState', 'memory', 'memoryImportance', 'relationshipChanges', 'beatOutcome', 'conditionOrCost', 'sceneSignal'],
+  required: ['shouldRespond', 'silenceReason', 'dialogue', 'action', 'emotion', 'statePatch', 'memory', 'memoryImportance', 'relationshipChanges', 'beatOutcome', 'conditionOrCost', 'sceneSignal'],
   additionalProperties: false
 };
 
@@ -68,15 +85,27 @@ const beatPlanSchema = {
     conditionOrCost: { type: 'string' }, reliefReason: { type: 'string' }
   }, required: ['phase','outcome','tensionDirection','conditionOrCost','reliefReason'], additionalProperties: false
 };
+const storyPatchSchema = {
+  type: 'object', properties: {
+    arcPhase: { type: ['string','null'], enum: ['setup','rising','turning','climax','aftermath',null] },
+    tension: { type: ['integer','null'], minimum: 0, maximum: 100 },
+    pacing: { type: ['string','null'], enum: ['slow','steady','fast',null] },
+    upsertActiveTensions: { type: 'array', maxItems: 3, items: { type: 'object', properties: { id: { type: 'string' }, summary: { type: 'string' }, involvedCharacterIds: { type: 'array', maxItems: 6, items: { type: 'string' } }, pressure: { type: 'integer', minimum: 0, maximum: 100 }, introducedAtSequence: { type: 'integer', minimum: 0 } }, required: ['id','summary','involvedCharacterIds','pressure','introducedAtSequence'], additionalProperties: false } },
+    removeActiveTensionIds: { type: 'array', maxItems: 5, items: { type: 'string' } },
+    upsertOpenQuestions: { type: 'array', maxItems: 3, items: { type: 'object', properties: { id: { type: 'string' }, text: { type: 'string' }, involvedCharacterIds: { type: 'array', maxItems: 6, items: { type: 'string' } }, urgency: { type: 'integer', minimum: 0, maximum: 100 }, introducedAtSequence: { type: 'integer', minimum: 0 } }, required: ['id','text','involvedCharacterIds','urgency','introducedAtSequence'], additionalProperties: false } },
+    removeOpenQuestionIds: { type: 'array', maxItems: 5, items: { type: 'string' } },
+    recentBeat: { type: 'object', properties: { type: { type: 'string', enum: ['connection','conflict','choice','setback','reveal','discovery','transition','reflection'] }, summary: { type: 'string' } }, required: ['type','summary'], additionalProperties: false }
+  }, required: ['arcPhase','tension','pacing','upsertActiveTensions','removeActiveTensionIds','upsertOpenQuestions','removeOpenQuestionIds','recentBeat'], additionalProperties: false
+};
 const directorProgressionSchema = {
   type: 'object', properties: {
     action: { type: 'string', enum: ['CONTINUE','INJECT_MINOR_EVENT','TRANSITION_SCENE','PROPOSE_MAJOR'] }, rationale: { type: 'string' },
     responders: { type: 'array', minItems: 1, maxItems: 2, items: { type: 'object', properties: { characterId: { type: 'string' }, reason: { type: 'string' } }, required: ['characterId','reason'], additionalProperties: false } },
-    storyState: storyStateSchema, sceneState: dramaticStateSchema, beatPlan: beatPlanSchema,
+    storyPatch: storyPatchSchema, sceneState: dramaticStateSchema, beatPlan: beatPlanSchema,
     eventPlan: { type: 'object', properties: eventPlanProperties, required: Object.keys(eventPlanProperties), additionalProperties: false },
     nextScene: { type: 'object', properties: { ...eventPlanProperties, participantIds: { type: 'array', maxItems: 6, items: { type: 'string' } } }, required: [...Object.keys(eventPlanProperties),'participantIds'], additionalProperties: false },
     majorProposals: { type: 'array', maxItems: 3, items: { type: 'object', properties: { category: { type: 'string', enum: ['관계','선택','발견','돌발','시간 전환','분위기'] }, text: { type: 'string' }, consequence: { type: 'string' }, time: { type: 'string' } }, required: ['category','text','consequence','time'], additionalProperties: false } }
-  }, required: ['action','rationale','responders','storyState','sceneState','beatPlan','eventPlan','nextScene','majorProposals'], additionalProperties: false
+  }, required: ['action','rationale','responders','storyPatch','sceneState','beatPlan','eventPlan','nextScene','majorProposals'], additionalProperties: false
 };
 
 const storyRepairSchema = {
@@ -185,6 +214,7 @@ class PersistentAppServer {
     this.pending = new Map();
     this.activeTurn = null;
     this.loadedThreads = new Set();
+    this.threadUsage = new Map();
     this.closed = false;
     this.child.stdout.on('data', (chunk) => this.onData(chunk));
     this.child.stderr.on('data', () => {});
@@ -211,7 +241,7 @@ class PersistentAppServer {
   }
 
   async initialize() {
-    await this.request('initialize', { clientInfo: { name: 'sceneweaver', version: '0.1.0' }, capabilities: { optOutNotificationMethods: ['item/agentMessage/delta'] } });
+    await this.request('initialize', { clientInfo: { name: 'sceneweaver', version: '0.1.0' }, capabilities: {} });
     this.send({ method: 'initialized', params: {} });
   }
 
@@ -228,10 +258,14 @@ class PersistentAppServer {
         this.pending.delete(message.id);
         if (message.error) pending.reject(new Error(`Codex app-server: ${message.error.message || 'unknown error'}`));
         else pending.resolve(message.result);
+      } else if (message.method === 'thread/tokenUsage/updated') {
+        if (message.params?.threadId && message.params?.tokenUsage) this.threadUsage.set(message.params.threadId, message.params.tokenUsage);
+      } else if (message.method === 'item/agentMessage/delta' && this.activeTurn && !this.activeTurn.firstTokenAt) {
+        this.activeTurn.firstTokenAt = Date.now();
       } else if (message.method === 'turn/completed' && this.activeTurn) {
         const activeTurn = this.activeTurn;
         this.activeTurn = null;
-        activeTurn.resolve(message.params?.turn);
+        activeTurn.resolve({ turn: message.params?.turn, timeToFirstTokenMs: activeTurn.firstTokenAt ? activeTurn.firstTokenAt - activeTurn.startedAt : null });
       }
     }
   }
@@ -247,7 +281,7 @@ class PersistentAppServer {
         endStage(runId, stage, { threadId: existingThreadId, model, effort, usage });
         return { threadId: existingThreadId, reused: true };
       }
-      const started = await this.request('thread/start', { model, cwd: process.cwd(), approvalPolicy: 'never', sandbox: 'read-only', serviceName: 'sceneweaver' });
+      const started = await this.request('thread/start', { model, cwd: AGENT_CWD, approvalPolicy: 'never', sandbox: 'read-only', serviceName: 'sceneweaver' });
       const threadId = started?.thread?.id;
       if (!threadId) throw new Error('Codex app-server did not return a thread id.');
       this.loadedThreads.add(threadId);
@@ -260,17 +294,19 @@ class PersistentAppServer {
     }
   }
 
-  async runTurn(prompt, outputSchema, runId, { threadId: existingThreadId = null, model = CODEX_MODEL, effort = 'medium', persistent = false, usage = 'Codex 호출' } = {}) {
+  async runTurn(prompt, outputSchema, runId, { threadId: existingThreadId = null, model = CODEX_MODEL, effort = 'medium', persistent = false, usage = 'Codex 호출', rollover = false } = {}) {
     const ensured = await this.ensureThread(existingThreadId, model, effort, runId, usage);
     const threadId = ensured.threadId;
     if (!threadId) throw new Error('Codex app-server did not return a thread id.');
     const modelStage = startStage(runId, 'model_generate', { threadId, model, effort, usage });
-    const completion = new Promise((resolve, reject) => { this.activeTurn = { resolve, reject }; });
+    const completion = new Promise((resolve, reject) => { this.activeTurn = { resolve, reject, threadId, startedAt: Date.now(), firstTokenAt: null }; });
     try {
-      await this.request('turn/start', { threadId, model, effort, cwd: process.cwd(), approvalPolicy: 'never', sandbox: 'read-only', input: [{ type: 'text', text: prompt }], outputSchema });
-      const turn = await completion;
-      endStage(runId, modelStage, { outputItems: turn?.items?.length || 0, usage });
-      return { turn, threadId, reused: ensured.reused };
+      await this.request('turn/start', { threadId, model, effort, cwd: AGENT_CWD, approvalPolicy: 'never', sandbox: 'read-only', input: [{ type: 'text', text: prompt }], outputSchema });
+      const completed = await completion;
+      const tokenUsage = this.threadUsage.get(threadId) || null;
+      const last = tokenUsage?.last || null;
+      endStage(runId, modelStage, { outputItems: completed.turn?.items?.length || 0, usage, rollover, timeToFirstTokenMs: completed.timeToFirstTokenMs, inputTokens: last?.inputTokens, cachedInputTokens: last?.cachedInputTokens, outputTokens: last?.outputTokens, reasoningOutputTokens: last?.reasoningOutputTokens, contextTokens: last?.inputTokens });
+      return { turn: completed.turn, threadId, reused: ensured.reused, tokenUsage, timeToFirstTokenMs: completed.timeToFirstTokenMs };
     } catch (error) {
       if (this.activeTurn) this.activeTurn = null;
       failStage(runId, modelStage, error);
@@ -288,6 +324,7 @@ class PersistentAppServer {
       try { await this.request(method, { threadId }); } catch (error) { failures.push(`${method}: ${error.message}`); }
     }
     this.loadedThreads.delete(threadId);
+    this.threadUsage.delete(threadId);
     if (failures.length) console.warn(`Codex thread cleanup incomplete (${threadId}): ${failures.join('; ')}`);
   }
 
@@ -346,7 +383,7 @@ async function executeStructured({ prompt, outputSchema, validate, label, runId,
       const result = JSON.parse(text);
       validate(result);
       endStage(runId, validationStage, { responseChars: text?.length || 0 });
-      return { ...result, threadId: turn.threadId, threadReused: turn.reused };
+      return { ...result, threadId: turn.threadId, threadReused: turn.reused, threadUsage: turn.tokenUsage, timeToFirstTokenMs: turn.timeToFirstTokenMs, threadRolledOver: Boolean(thread.rollover), previousThreadId: thread.previousThreadId || null };
     } catch (error) { failStage(runId, validationStage, error); throw error; }
   } catch (error) {
     if (appServerStage) failStage(runId, appServerStage, error);
@@ -374,9 +411,10 @@ export function generateCodexTurn(context) {
   const contextStage = startStage(context.runId, 'context_build');
   const prompt = buildCharacterTurnPrompt(context);
   endStage(context.runId, contextStage, { promptChars: prompt.length, publicLogs: Math.min(6, context.state.logs.length), privateMemories: context.memories.length });
+  const rollover = shouldRollover('character', context.character.activeThreadId, context.character.activeThreadTurnCount, context.character.activeThreadContextTokens, context.character.threadRolloverRequired);
   return runCodexStructured({
     prompt, outputSchema: turnSchema, label: `캐릭터 응답 · ${context.character.name}`, runId: context.runId,
-    thread: { threadId: context.character.activeThreadId, model: context.character.effectiveModel || CODEX_MODEL, effort: context.character.effectiveReasoningEffort || 'medium', persistent: true },
+    thread: { threadId: rollover ? null : context.character.activeThreadId, previousThreadId: rollover ? context.character.activeThreadId : null, rollover, model: context.character.effectiveModel || CODEX_MODEL, effort: context.character.effectiveReasoningEffort || 'medium', persistent: true },
     validate: (result) => {
       if (typeof result.shouldRespond !== 'boolean' || typeof result.silenceReason !== 'string') throw new Error('invalid response decision');
       if (typeof result.emotion !== 'string' || !result.emotion.trim()) throw new Error('missing emotion');
@@ -396,13 +434,16 @@ export function generateCodexTurn(context) {
       const expectedOutcome = context.state.dramaticState?.outcomeConstraint || 'open';
       if (result.shouldRespond && result.beatOutcome !== expectedOutcome) throw new Error(`beat outcome must be ${expectedOutcome}`);
       if (result.shouldRespond && ['qualified_success','setback'].includes(result.beatOutcome) && !result.conditionOrCost) throw new Error('qualified success or setback requires a concrete condition or cost');
-      result.nextState = cleanCharacterState(result.nextState, context.character.goal);
+      const patch = result.statePatch;
+      if (!patch || typeof patch !== 'object' || !['setCurrentGoal','setInternalConflict'].every((key) => patch[key] === null || typeof patch[key] === 'string')) throw new Error('invalid character state patch');
+      for (const key of ['addBeliefs','removeBeliefs','addCommitments','removeCommitments','appendDevelopmentNotes']) if (!Array.isArray(patch[key]) || patch[key].some((item) => typeof item !== 'string')) throw new Error(`invalid character state patch ${key}`);
+      result.nextState = applyCharacterStatePatch(context.character.currentState, patch, context.character.goal);
       for (const change of result.relationshipChanges) {
         if (typeof change.label !== 'string' || typeof change.reason !== 'string') throw new Error('invalid relationship change');
         change.label = change.label.trim().slice(0, 120); change.reason = change.reason.trim().slice(0, 240);
       }
       if (!['continue', 'stalled', 'complete'].includes(result.sceneSignal)) throw new Error('invalid sceneSignal');
-      if (!result.shouldRespond && (result.memory || result.memoryImportance !== 0 || result.relationshipChanges.length || result.beatOutcome !== 'open' || result.conditionOrCost || result.sceneSignal !== 'continue')) throw new Error('silent response contains state changes');
+      if (!result.shouldRespond && (result.memory || result.memoryImportance !== 0 || result.relationshipChanges.length || result.beatOutcome !== 'open' || result.conditionOrCost || result.sceneSignal !== 'continue' || JSON.stringify(result.nextState) !== JSON.stringify(cleanCharacterState(context.character.currentState, context.character.goal)))) throw new Error('silent response contains state changes');
     }
   });
 }
@@ -411,11 +452,12 @@ export function generateDirectorProgressionPlan(state, participants, runId, dire
   updateRunMetadata(runId, { activeAgentType: 'director', activeAgentName: '월드 디렉터', activePhase: '진행 계획', activeThreadId: director.activeThreadId || null, activeModel: director.model || CODEX_MODEL, activeEffort: director.reasoningEffort || 'high' });
   const prompt = buildDirectorProgressionPrompt(state, participants);
   return runCodexStructured({ prompt, outputSchema: directorProgressionSchema, label: 'World Director · 진행 계획', runId,
-    thread: { threadId: director.activeThreadId, model: director.model || CODEX_MODEL, effort: director.reasoningEffort || 'high', persistent: true },
+    thread: directorThreadOptions(director),
     validate: (result) => {
       if (!DIRECTOR_ACTIONS.has(result.action) || typeof result.rationale !== 'string') throw new Error('invalid Director action');
       const characterIds = state.characters.map((item) => item.id);
-      result.storyState = cleanStoryState(result.storyState, characterIds, state.storyState);
+      if (!result.storyPatch || typeof result.storyPatch !== 'object') throw new Error('invalid story state patch');
+      result.storyState = applyStoryStatePatch(state.storyState, result.storyPatch, characterIds, state.latestSceneSequence);
       const beatPlan = result.beatPlan;
       if (!RHYTHM_PHASES.has(beatPlan?.phase) || !BEAT_OUTCOMES.has(beatPlan?.outcome) || !TENSION_DIRECTIONS.has(beatPlan?.tensionDirection)) throw new Error('invalid beat plan');
       beatPlan.conditionOrCost = String(beatPlan.conditionOrCost || '').trim().slice(0, 240);
@@ -430,6 +472,8 @@ export function generateDirectorProgressionPlan(state, participants, runId, dire
       result.storyState.rhythm = advanceRhythmState(state.storyState, beatPlan, result.storyState.tension);
       result.sceneState = cleanDramaticState({ ...result.sceneState, beatIntent: beatPlan.phase, outcomeConstraint: beatPlan.outcome, pressureSource: beatPlan.conditionOrCost, reliefReason: beatPlan.reliefReason }, characterIds, state.dramaticState);
       if (!Array.isArray(result.responders) || result.responders.length < 1 || result.responders.length > 2) throw new Error('invalid responders');
+      if (result.action === 'INJECT_MINOR_EVENT' && (!result.eventPlan?.text?.trim() || !result.eventPlan?.eventType?.trim())) throw new Error('minor event plan is required');
+      if (result.action === 'TRANSITION_SCENE' && (!result.nextScene?.description?.trim() || !result.nextScene?.participantIds?.length)) throw new Error('next scene plan is required');
       if (result.action === 'PROPOSE_MAJOR' && (!Array.isArray(result.majorProposals) || result.majorProposals.length < 2 || result.majorProposals.length > 3)) throw new Error('major proposals require 2-3 options');
     }
   });
@@ -438,7 +482,7 @@ export function generateDirectorProgressionPlan(state, participants, runId, dire
 export function generateStoryRepair(context, runId, director) {
   updateRunMetadata(runId, { activeAgentType: 'director', activeAgentName: '월드 디렉터', activePhase: '이야기 상태 진단', activeThreadId: director.activeThreadId || null, activeModel: director.model || CODEX_MODEL, activeEffort: director.reasoningEffort || 'high' });
   return runCodexStructured({ prompt: buildStoryRepairPrompt(context), outputSchema: storyRepairSchema, label: 'World Director · 이야기 보정안', runId, timeoutMs: 240000,
-    thread: { threadId: director.activeThreadId, model: director.model || CODEX_MODEL, effort: director.reasoningEffort || 'high', persistent: true },
+    thread: directorThreadOptions(director),
     validate: (result) => {
       const ids = context.state.characters.map((item) => item.id);
       result.storyState = cleanStoryState(result.storyState, ids, context.state.storyState);
@@ -457,7 +501,7 @@ export function generateResponderSelection(prompt, runId) {
 export function generateDirectorResponderSelection(prompt, runId, director) {
   updateRunMetadata(runId, { activeAgentType: 'director', activeAgentName: '월드 디렉터', activePhase: '응답자 선택', activeThreadId: director.activeThreadId || null, activeModel: director.model || CODEX_MODEL, activeEffort: director.reasoningEffort || 'high' });
   return runCodexStructured({ prompt, outputSchema: responderSchema, label: 'World Director · 응답자 선택', runId,
-    thread: { threadId: director.activeThreadId, model: director.model || CODEX_MODEL, effort: director.reasoningEffort || 'high', persistent: true },
+    thread: directorThreadOptions(director),
     validate: (result) => { if (!Array.isArray(result.responders)) throw new Error('invalid responders'); }
   });
 }
@@ -504,7 +548,7 @@ export function generateDirectorEventSuggestions(state, runId, desiredTypes, dir
   endStage(runId, contextStage, { promptChars: prompt.length, publicLogs: Math.min(30, state.logs.length), director: true });
   return runCodexStructured({
     prompt, outputSchema: eventSuggestionsSchema, label: 'World Director · 사건 추천', runId,
-    thread: { threadId: director.activeThreadId, model: director.model || CODEX_MODEL, effort: director.reasoningEffort || 'high', persistent: true },
+    thread: directorThreadOptions(director),
     validate: (result) => {
       if (!Array.isArray(result.suggestions) || result.suggestions.length !== 10) throw new Error('invalid suggestions');
       for (const suggestion of result.suggestions) {
@@ -531,7 +575,7 @@ export function generateDirectorEventApplication(state, event, runId, director) 
   updateRunMetadata(runId, { activeAgentType: 'director', activeAgentName: '월드 디렉터', activePhase: '사건 적용 판단', activeThreadId: director.activeThreadId || null, activeModel: director.model || CODEX_MODEL, activeEffort: director.reasoningEffort || 'high' });
   const prompt = buildDirectorEventApplyPrompt(state, event);
   return runCodexStructured({ prompt, outputSchema: directorEventPlanSchema, label: 'World Director · 사건 적용', runId,
-    thread: { threadId: director.activeThreadId, model: director.model || CODEX_MODEL, effort: director.reasoningEffort || 'high', persistent: true },
+    thread: directorThreadOptions(director),
     validate: (result) => validateDirectorEventPlan(result, { requireScene: event.forceScene })
   });
 }
@@ -540,7 +584,7 @@ export function generateDirectorSceneTransition(state, runId, director) {
   updateRunMetadata(runId, { activeAgentType: 'director', activeAgentName: '월드 디렉터', activePhase: '장면 전환 판단', activeThreadId: director.activeThreadId || null, activeModel: director.model || CODEX_MODEL, activeEffort: director.reasoningEffort || 'high' });
   const prompt = buildDirectorSceneTransitionPrompt(state);
   return runCodexStructured({ prompt, outputSchema: directorEventPlanSchema, label: 'World Director · 장면 전환', runId,
-    thread: { threadId: director.activeThreadId, model: director.model || CODEX_MODEL, effort: director.reasoningEffort || 'high', persistent: true },
+    thread: directorThreadOptions(director),
     validate: (result) => validateDirectorEventPlan(result, { requireScene: true })
   });
 }

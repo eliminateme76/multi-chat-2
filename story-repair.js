@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { generateStoryRepair } from './codex-client.js';
+import { cleanupCodexThread, generateStoryRepair } from './codex-client.js';
 import { getDirectorContext, getStoryState, updateDirectorThread } from './story-engine.js';
 import { cleanCharacterState, cleanDramaticState, cleanStoryState } from './story-dynamics.js';
 
@@ -54,9 +54,13 @@ export async function createStoryRepairProposal(pool, projectId, runId) {
   const memories = (await pool.query(`SELECT id,character_id AS "characterId",memory_text AS "memoryText",emotion,importance,created_at AS "createdAt"
     FROM character_memories WHERE project_id=$1 AND archived_at IS NULL ORDER BY character_id,importance DESC,created_at DESC`, [projectId])).rows;
   const generated = validateRepair(await generateStoryRepair({ state, sceneHistory, memories }, runId, director), state, memories);
-  const threadId = generated.threadId;
+  const runtime = { threadId: generated.threadId, threadUsage: generated.threadUsage, previousThreadId: generated.previousThreadId };
   delete generated.threadId;
   delete generated.threadReused;
+  delete generated.threadUsage;
+  delete generated.timeToFirstTokenMs;
+  delete generated.threadRolledOver;
+  delete generated.previousThreadId;
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -66,8 +70,9 @@ export async function createStoryRepairProposal(pool, projectId, runId) {
     await client.query("UPDATE story_repair_proposals SET status='STALE',decided_at=NOW() WHERE project_id=$1 AND status='PENDING'", [projectId]);
     const id = randomUUID();
     await client.query(`INSERT INTO story_repair_proposals(id,project_id,source_world_sequence,proposal) VALUES ($1,$2,$3,$4)`, [id, projectId, currentSequence, JSON.stringify(generated)]);
-    await updateDirectorThread(client, projectId, threadId, currentSequence);
+    await updateDirectorThread(client, projectId, runtime, currentSequence);
     await client.query('COMMIT');
+    await cleanupCodexThread(runtime.previousThreadId);
     return (await client.query(`${selectProposal} WHERE id=$1`, [id])).rows[0];
   } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
 }

@@ -13,6 +13,7 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 let server;
 let serverOutput = '';
 let createdWorldId;
+let clonedWorldId;
 let worldDraftId;
 const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 const requestResponse = async (path, options) => {
@@ -114,6 +115,22 @@ try {
   if (!['build','pressure','choice','consequence','release'].includes(operation.result?.beatPhase) || !['open','success','qualified_success','setback'].includes(operation.result?.beatOutcome) || !['rise','hold','fall'].includes(operation.result?.tensionDirection)) throw new Error('Structured story rhythm metadata is missing from the progression result.');
   if (afterTurn.storyState.rhythm.phase !== operation.result.beatPhase || afterTurn.storyState.rhythm.lastOutcome !== operation.result.beatOutcome) throw new Error('Persisted story rhythm does not match the Director plan.');
   if (afterTurn.logs.at(-1).payload?.beatOutcome !== operation.result.beatOutcome) throw new Error('Character beat outcome was not persisted with the scene entry.');
+  if (operation.steps?.length !== 1) throw new Error('A progression operation generated more than one character response.');
+  const persistedRuntime = (await pool.query(`SELECT p.director_thread_turn_count AS "directorTurns",p.director_thread_context_tokens AS "directorTokens",
+    c.active_thread_turn_count AS "characterTurns",c.active_thread_context_tokens AS "characterTokens"
+    FROM projects p JOIN characters c ON c.project_id=p.id AND c.id=$2 WHERE p.id=$1`, [projectId, operation.steps[0].characterId])).rows[0];
+  if (Number(persistedRuntime.directorTurns) !== 2 || Number(persistedRuntime.characterTurns) !== 1 || Number(persistedRuntime.directorTokens) <= 0 || Number(persistedRuntime.characterTokens) <= 0) throw new Error(`Persistent thread runtime metadata was not stored: ${JSON.stringify(persistedRuntime)}`);
+  const queuedCharacterId = afterTurn.participants.find((participant) => participant.characterId !== operation.steps[0].characterId)?.characterId || afterTurn.participants[0].characterId;
+  const reusableState = { ...afterTurn.dramaticState, plannedResponderIds: [queuedCharacterId], planStartedSequence: afterTurn.latestSceneSequence, responsesConsumed: 1 };
+  await pool.query(`UPDATE scenes SET dramatic_state=$2,progress_signal='continue' WHERE id=$1`, [afterTurn.sceneId, JSON.stringify(reusableState)]);
+  const queuedReuse = await request('/api/turns', { method: 'POST' });
+  let reusedOperation;
+  for (let attempt = 0; attempt < 240; attempt += 1) {
+    reusedOperation = await request(`/api/operations/${queuedReuse.operationId}`);
+    if (['COMPLETED', 'FAILED'].includes(reusedOperation.status)) break;
+    await sleep(500);
+  }
+  if (reusedOperation?.status !== 'COMPLETED' || !reusedOperation.result?.planReused || reusedOperation.result?.runtime?.director !== null || reusedOperation.steps?.length !== 1) throw new Error(`Reusable Director plan validation failed: ${reusedOperation?.error || reusedOperation?.status}`);
   const runtimeSnapshot = await request('/api/runtime/snapshot');
   const progressionRun = runtimeSnapshot.runs.find((run) => run.projectId === projectId && run.type === 'progression' && run.status === 'completed');
   const characterGeneration = progressionRun?.stages.find((stage) => stage.name === 'model_generate' && stage.metadata.usage?.startsWith('캐릭터 응답'));
@@ -132,9 +149,13 @@ try {
   const inheritedSettings = await request('/api/runtime/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(preservePayload) });
   const inheritedCharacter = inheritedSettings.characters.find((character) => character.id === preservePayload.characters[0].id);
   if (inheritedCharacter.modelOverride !== null || inheritedCharacter.reasoningEffortOverride !== null || inheritedCharacter.effectiveModel !== inheritedSettings.project.character.model || inheritedCharacter.threadId !== threadIdsBeforeSave.get(inheritedCharacter.id)) throw new Error('Character inheritance did not preserve the existing thread.');
-  console.log(JSON.stringify({ createdWorldId, createdCharacters: createdWorld.state.characters.length, configuredModel: testModel.id, configuredEffort: testEffort, preservedThreads: [...threadIdsBeforeSave.values()].filter(Boolean).length, inheritedCharacter: inheritedCharacter.name, beforeScene: before.sceneNumber, afterScene: afterEvent.sceneNumber, afterTurn: afterTurn.turn, beat: `${operation.result.beatPhase}/${operation.result.beatOutcome}/${operation.result.tensionDirection}`, signal: afterTurn.sceneSignal }, null, 2));
+  const cloned = await request('/api/projects/clone', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: 'API 검증 복제 월드' }) });
+  clonedWorldId = cloned.projectId;
+  if (cloned.state.characters.length !== afterTurn.characters.length || cloned.state.characters.some((character) => afterTurn.characters.some((source) => source.id === character.id) || character.activeThreadId)) throw new Error('Playthrough clone did not issue clean world-local character/thread ids.');
+  console.log(JSON.stringify({ createdWorldId, clonedWorldId, createdCharacters: createdWorld.state.characters.length, configuredModel: testModel.id, configuredEffort: testEffort, preservedThreads: [...threadIdsBeforeSave.values()].filter(Boolean).length, inheritedCharacter: inheritedCharacter.name, beforeScene: before.sceneNumber, afterScene: afterEvent.sceneNumber, afterTurn: afterTurn.turn, beat: `${operation.result.beatPhase}/${operation.result.beatOutcome}/${operation.result.tensionDirection}`, signal: afterTurn.sceneSignal, oneResponsePerOperation: operation.steps.length === 1, reusedDirectorPlan: reusedOperation.result.planReused, firstOperationMs: Date.parse(operation.completedAt) - Date.parse(operation.startedAt), reusedOperationMs: Date.parse(reusedOperation.completedAt) - Date.parse(reusedOperation.startedAt), firstRuntime: operation.result.runtime }, null, 2));
 } finally {
   server?.kill();
+  if (clonedWorldId) await pool.query('DELETE FROM projects WHERE id=$1', [clonedWorldId]);
   if (createdWorldId) await pool.query('DELETE FROM projects WHERE id=$1', [createdWorldId]);
   if (worldDraftId) await pool.query('DELETE FROM world_creation_drafts WHERE id=$1', [worldDraftId]);
   await pool.query('DELETE FROM projects WHERE id=$1', [projectId]);

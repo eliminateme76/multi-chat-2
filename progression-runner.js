@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { generateCodexTurn, generateDirectorProgressionPlan } from './codex-client.js';
-import { appendSceneEvent, buildCharacterContext, createSceneFromEvent, getActiveParticipants, getConversationSettlement, getDirectorContext, getStoryState, persistGeneratedTurn, updateDirectorThread } from './story-engine.js';
+import { cleanupCodexThread, generateCodexTurn, generateDirectorProgressionPlan } from './codex-client.js';
+import { appendSceneEvent, buildCharacterContext, consumePlannedResponder, createSceneFromEvent, getActiveParticipants, getConversationSettlement, getDirectorContext, getStoryState, persistGeneratedTurn, updateDirectorThread } from './story-engine.js';
 import { endStage, failRun, failStage, finishRun, startRun, startStage, updateRunMetadata } from './runtime-telemetry.js';
-import { cleanStoryState } from './story-dynamics.js';
+import { cleanDramaticState, cleanStoryState } from './story-dynamics.js';
 
 const activeProjects = new Set();
 const minResponders = () => 1;
@@ -81,16 +81,30 @@ async function runProgression(pool, projectId, operationId) {
     let state = await getStoryState(client, projectId);
     let participants = await getActiveParticipants(client, projectId);
     let directorAction = operation.payload.directorAction || null;
+    let planReused = false;
+    let directorRuntime = null;
     const minimum = minResponders(state.presentationMode);
     if (participants.length < minimum) throw new Error(`${state.presentationMode === 'chat' ? 'CHAT' : 'STORY'} 장면의 참여자가 부족합니다.`);
     let steps = (await client.query(`SELECT id,character_id AS "characterId",step_order AS "stepOrder",status FROM world_operation_steps WHERE operation_id=$1 ORDER BY step_order`, [operationId])).rows;
     if (!steps.length) {
       const requested = operation.payload.mode === 'MANUAL' ? operation.payload.responderIds : null;
       let responderIds = operation.payload.directorPlanned && Array.isArray(operation.payload.plannedResponderIds) ? operation.payload.plannedResponderIds : requested;
+      const queuedResponders = state.dramaticState?.plannedResponderIds || [];
+      const plannedAt = Number(state.dramaticState?.planStartedSequence || 0);
+      const planInvalidated = state.logs.some((entry) => entry.type === 'event' && Number(entry.worldSequence || 0) > plannedAt);
+      const reusableResponder = operation.payload.mode === 'AUTO' && state.sceneSignal === 'continue' && Number(state.dramaticState?.responsesConsumed || 0) < 2 && !planInvalidated
+        ? queuedResponders.find((id) => participants.some((candidate) => candidate.id === id))
+        : null;
+      if (!responderIds?.length && reusableResponder) {
+        responderIds = [reusableResponder];
+        planReused = true;
+        directorAction = 'REUSE_PLAN';
+        await client.query(`UPDATE world_operations SET payload=payload || $2::jsonb WHERE id=$1`, [operationId, JSON.stringify({ directorPlanned: true, planReused: true, plannedResponderIds: responderIds })]);
+      }
       const latestSequence = state.latestSceneSequence;
       const cadence = { gentle: 8, balanced: 5, high: 3 }[state.dramaIntensity] || 5;
       const needsChatPlan = state.sceneSignal !== 'continue' || latestSequence - Number(state.storyState.lastDirectorSequence || 0) >= cadence;
-      if (!operation.payload.directorPlanned && !responderIds?.length && (state.presentationMode === 'scene' || needsChatPlan)) {
+      if (!planReused && !operation.payload.directorPlanned && !responderIds?.length && (state.presentationMode === 'scene' || needsChatPlan)) {
         const director = await getDirectorContext(client, projectId);
         const tensionBefore = Number(state.storyState?.tension || 0);
         const directorStage = startStage(runId, 'director_plan', { intensity: state.dramaIntensity, tension: tensionBefore });
@@ -102,6 +116,7 @@ async function runProgression(pool, projectId, operationId) {
           failStage(runId, directorStage, error);
           throw error;
         }
+        directorRuntime = plan;
         directorAction = plan.action;
         const currentIds = new Set(participants.map((item) => item.id));
         const nextIds = plan.action === 'TRANSITION_SCENE' ? new Set(plan.nextScene.participantIds.filter((id) => state.characters.some((item) => item.id === id))) : currentIds;
@@ -116,10 +131,13 @@ async function runProgression(pool, projectId, operationId) {
           for (const proposal of plan.majorProposals) await client.query(`INSERT INTO event_suggestions(id,batch_id,project_id,source_scene_id,category,text,scene_time,severity,consequence,requires_approval)
             VALUES ($1,$2,$3,$4,$5,$6,$7,'MAJOR',$8,TRUE)`, [randomUUID(), batchId, projectId, state.sceneId, proposal.category, proposal.text, proposal.time, proposal.consequence]);
           const nextStoryState = cleanStoryState({ ...plan.storyState, lastDirectorSequence: state.latestSceneSequence }, state.characters.map((item) => item.id), state.storyState);
-          await client.query('UPDATE projects SET story_state=$2,active_director_thread_id=$3,last_director_event_sequence=$4,updated_at=NOW() WHERE id=$1', [projectId, JSON.stringify(nextStoryState), plan.threadId, state.latestSceneSequence]);
-          await client.query('UPDATE scenes SET dramatic_state=$2,updated_at=NOW() WHERE id=$1', [state.sceneId, JSON.stringify(plan.sceneState)]);
+          const stoppedPlanState = cleanDramaticState({ ...plan.sceneState, plannedResponderIds: [], planStartedSequence: state.latestSceneSequence, responsesConsumed: 0 }, state.characters.map((item) => item.id), state.dramaticState);
+          await client.query('UPDATE projects SET story_state=$2,updated_at=NOW() WHERE id=$1', [projectId, JSON.stringify(nextStoryState)]);
+          await updateDirectorThread(client, projectId, plan, state.latestSceneSequence);
+          await client.query('UPDATE scenes SET dramatic_state=$2,updated_at=NOW() WHERE id=$1', [state.sceneId, JSON.stringify(stoppedPlanState)]);
           await client.query(`UPDATE world_operations SET status='COMPLETED',completed_at=NOW(),result=$2 WHERE id=$1`, [operationId, JSON.stringify({ completed: true, awaitingDecision: true, majorBatchId: batchId, directorAction: plan.action, beatPhase: plan.beatPlan.phase, beatOutcome: plan.beatPlan.outcome, tensionDirection: plan.beatPlan.tensionDirection, responders: [], messagesCreated: 0 })]);
           await client.query('COMMIT');
+          await cleanupCodexThread(plan.previousThreadId);
           updateRunMetadata(runId, { directorAction: plan.action, beatPhase: plan.beatPlan.phase, beatOutcome: plan.beatPlan.outcome, tensionDirection: plan.beatPlan.tensionDirection, tensionBefore: state.storyState.tension, tensionAfter: nextStoryState.tension, majorBatchId: batchId });
           finishRun(runId, { operationId, directorAction: plan.action, awaitingDecision: true, messagesCreated: 0 });
           return;
@@ -130,25 +148,33 @@ async function runProgression(pool, projectId, operationId) {
         participants = await getActiveParticipants(client, projectId);
         const planSequence = actionOutcome?.sequence || state.latestSceneSequence;
         const nextStoryState = cleanStoryState({ ...plan.storyState, lastDirectorSequence: planSequence }, state.characters.map((item) => item.id), state.storyState);
-        await client.query('UPDATE projects SET story_state=$2,active_director_thread_id=$3,last_director_event_sequence=$4,updated_at=NOW() WHERE id=$1', [projectId, JSON.stringify(nextStoryState), plan.threadId, planSequence]);
-        await client.query('UPDATE scenes SET dramatic_state=$2,public_direction=COALESCE(NULLIF($3,\'\'),public_direction),updated_at=NOW() WHERE id=$1', [state.sceneId, JSON.stringify(plan.sceneState), plan.sceneState.objective]);
+        const queuedSceneState = cleanDramaticState({ ...plan.sceneState, plannedResponderIds: responderIds.slice(0, 2), planStartedSequence: planSequence, responsesConsumed: 0 }, state.characters.map((item) => item.id), state.dramaticState);
+        await client.query('UPDATE projects SET story_state=$2,updated_at=NOW() WHERE id=$1', [projectId, JSON.stringify(nextStoryState)]);
+        await updateDirectorThread(client, projectId, plan, planSequence);
+        await client.query('UPDATE scenes SET dramatic_state=$2,public_direction=COALESCE(NULLIF($3,\'\'),public_direction),updated_at=NOW() WHERE id=$1', [state.sceneId, JSON.stringify(queuedSceneState), queuedSceneState.objective]);
         await client.query(`UPDATE world_operations SET payload=payload || $2::jsonb WHERE id=$1`, [operationId, JSON.stringify({ directorPlanned: true, directorAction: plan.action, plannedResponderIds: responderIds, beatPhase: plan.beatPlan.phase, beatOutcome: plan.beatPlan.outcome, tensionDirection: plan.beatPlan.tensionDirection })]);
         await client.query('COMMIT');
+        await cleanupCodexThread(plan.previousThreadId);
         state = await getStoryState(client, projectId);
         participants = await getActiveParticipants(client, projectId);
         updateRunMetadata(runId, { directorAction: plan.action, beatPhase: plan.beatPlan.phase, beatOutcome: plan.beatPlan.outcome, tensionDirection: plan.beatPlan.tensionDirection, tensionBefore, tensionAfter: nextStoryState.tension, participantCount: participants.length });
       } else if (!responderIds?.length) {
-        responderIds = participants.map((participant) => participant.id);
+        responderIds = [participants[Math.abs(Number(state.turn || 0)) % participants.length].id];
       }
       responderIds = [...new Set(responderIds)].filter((id) => participants.some((candidate) => candidate.id === id));
       if (responderIds.length < minimum) throw new Error(`응답자는 최소 ${minimum}명이어야 합니다.`);
       await client.query('BEGIN');
-      for (const [index, characterId] of responderIds.entries()) await client.query(`INSERT INTO world_operation_steps(operation_id,step_order,character_id) VALUES ($1,$2,$3)`, [operationId, index, characterId]);
+      if (operation.payload.mode === 'MANUAL' && state.dramaticState?.plannedResponderIds?.length) {
+        const clearedPlan = cleanDramaticState({ ...state.dramaticState, plannedResponderIds: [], responsesConsumed: 0 }, state.characters.map((item) => item.id), state.dramaticState);
+        await client.query('UPDATE scenes SET dramatic_state=$2,updated_at=NOW() WHERE id=$1', [state.sceneId, JSON.stringify(clearedPlan)]);
+      }
+      for (const [index, characterId] of responderIds.slice(0, 1).entries()) await client.query(`INSERT INTO world_operation_steps(operation_id,step_order,character_id) VALUES ($1,$2,$3)`, [operationId, index, characterId]);
       await client.query('COMMIT');
       steps = (await client.query(`SELECT id,character_id AS "characterId",step_order AS "stepOrder",status FROM world_operation_steps WHERE operation_id=$1 ORDER BY step_order`, [operationId])).rows;
     }
     const responders = [];
     const silentParticipants = [];
+    const characterRuntime = [];
     let messagesCreated = 0;
     for (const step of steps) {
       if (step.status === 'COMPLETED') continue;
@@ -170,14 +196,17 @@ async function runProgression(pool, projectId, operationId) {
       }
       await client.query('BEGIN');
       const outcome = await persistGeneratedTurn(client, context, turn);
+      await consumePlannedResponder(client, context, turn);
       await client.query(`UPDATE world_operation_steps SET status='COMPLETED',thread_id=$2,entry_id=$3,completed_at=NOW() WHERE id=$1`, [step.id, turn.threadId, outcome.entryId]);
       await client.query('COMMIT');
+      await cleanupCodexThread(turn.previousThreadId);
+      characterRuntime.push({ characterId: step.characterId, timeToFirstTokenMs: turn.timeToFirstTokenMs, contextTokens: Number(turn.threadUsage?.last?.inputTokens || 0), outputTokens: Number(turn.threadUsage?.last?.outputTokens || 0), threadRolledOver: turn.threadRolledOver });
       if (outcome.skipped) silentParticipants.push({ characterId: step.characterId, reason: outcome.silenceReason });
       else { responders.push(step.characterId); messagesCreated += 1; }
     }
     const settlement = await getConversationSettlement(client, projectId);
     if (state.presentationMode === 'chat' && settlement.settled) await client.query("UPDATE scenes SET progress_signal='complete',public_direction='모든 참가자가 현재 대화를 마쳤습니다. 새 사건을 기다립니다.',updated_at=NOW() WHERE project_id=$1 AND status='active'", [projectId]);
-    const result = { completed: true, transition: null, directorAction, beatPhase: state.dramaticState?.beatIntent || null, beatOutcome: state.dramaticState?.outcomeConstraint || null, tensionDirection: state.storyState?.rhythm?.lastTensionDirection || null, responders, silentParticipants, conversationSettled: settlement.settled, messagesCreated };
+    const result = { completed: true, transition: null, directorAction, planReused, beatPhase: state.dramaticState?.beatIntent || null, beatOutcome: state.dramaticState?.outcomeConstraint || null, tensionDirection: state.storyState?.rhythm?.lastTensionDirection || null, responders, silentParticipants, conversationSettled: settlement.settled, messagesCreated, runtime: { director: directorRuntime ? { timeToFirstTokenMs: directorRuntime.timeToFirstTokenMs, contextTokens: Number(directorRuntime.threadUsage?.last?.inputTokens || 0), outputTokens: Number(directorRuntime.threadUsage?.last?.outputTokens || 0), threadRolledOver: directorRuntime.threadRolledOver } : null, characters: characterRuntime } };
     await client.query(`UPDATE world_operations SET status='COMPLETED',completed_at=NOW(),result=$2 WHERE id=$1`, [operationId, JSON.stringify(result)]);
     finishRun(runId, { operationId, directorAction, sceneTransitioned: directorAction === 'TRANSITION_SCENE', conversationSettled: settlement.settled, messagesCreated });
   } catch (error) {

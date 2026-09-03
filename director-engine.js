@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { generateDirectorEventApplication, generateDirectorEventSuggestions, generateDirectorSceneTransition } from './codex-client.js';
+import { cleanupCodexThread, generateDirectorEventApplication, generateDirectorEventSuggestions, generateDirectorSceneTransition } from './codex-client.js';
 import { appendSceneEvent, createSceneFromEvent, getDirectorContext, getStoryState, updateDirectorThread } from './story-engine.js';
 import { cleanStoryState } from './story-dynamics.js';
 
@@ -7,8 +7,8 @@ async function latestSequence(client, projectId) {
   return Number((await client.query('SELECT COALESCE(MAX(world_sequence),0) AS sequence FROM scene_entries WHERE project_id=$1', [projectId])).rows[0].sequence);
 }
 
-async function persistDirector(client, projectId, threadId, sequence) {
-  await updateDirectorThread(client, projectId, threadId, sequence ?? await latestSequence(client, projectId));
+async function persistDirector(client, projectId, result, sequence) {
+  await updateDirectorThread(client, projectId, result, sequence ?? await latestSequence(client, projectId));
 }
 
 export async function listEventSuggestions(queryable, projectId) {
@@ -41,8 +41,9 @@ export async function createDirectorSuggestions(pool, projectId, desiredTypes, r
       VALUES ($1,$2,$3,$4)`, [batchId, projectId, current.state.sceneId, sourceSequence]);
     for (const suggestion of result.suggestions) await client.query(`INSERT INTO event_suggestions(id,batch_id,project_id,source_scene_id,category,text,scene_time)
       VALUES ($1,$2,$3,$4,$5,$6,$7)`, [randomUUID(), batchId, projectId, current.state.sceneId, suggestion.category, suggestion.text, suggestion.time]);
-    await persistDirector(client, projectId, result.threadId, sourceSequence);
+    await persistDirector(client, projectId, result, sourceSequence);
     await client.query('COMMIT');
+    await cleanupCodexThread(result.previousThreadId);
     const suggestions = await listEventSuggestions(client, projectId);
     return { batchId, suggestions, generatedSuggestions: suggestions.filter((suggestion) => suggestion.batchId === batchId), threadId: result.threadId };
   } catch (error) {
@@ -81,8 +82,9 @@ export async function applyDirectorEvent(pool, projectId, event, runId, suggesti
         await client.query(`UPDATE event_suggestion_batches SET status='SUPERSEDED' WHERE id=$1`, [source.batchId]);
       }
     }
-    await persistDirector(client, projectId, plan.threadId, outcome.sequence);
+    await persistDirector(client, projectId, plan, outcome.sequence);
     await client.query('COMMIT');
+    await cleanupCodexThread(plan.previousThreadId);
     return { state: await getStoryState(client, projectId), outcome, plan };
   } catch (error) {
     await client.query('ROLLBACK');
@@ -116,8 +118,9 @@ export async function transitionCompletedScene(client, projectId, runId) {
     const current = await getDirectorContext(client, projectId);
     if (!current || current.state.sceneId !== context.state.sceneId || current.state.sceneSignal !== 'complete') { await client.query('ROLLBACK'); return null; }
     const outcome = await createSceneFromEvent(client, projectId, plan);
-    await persistDirector(client, projectId, plan.threadId, outcome.sequence);
+    await persistDirector(client, projectId, plan, outcome.sequence);
     await client.query('COMMIT');
+    await cleanupCodexThread(plan.previousThreadId);
     return outcome;
   } catch (error) {
     await client.query('ROLLBACK');

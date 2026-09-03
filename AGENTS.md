@@ -59,8 +59,8 @@ Browser (index.html + app.js)
 
 ### Critical behavior
 
-- `POST /api/turns` selects the next character from `turn_number`.
-- `story-engine.js` selects the speaker and loads the active scene plus that character's private memories.
+- `POST /api/turns` enqueues one durable progression operation and generates at most one character response.
+- `progression-runner.js` reuses a valid two-response Director plan or asks the Director for a new plan; `story-engine.js` then loads the selected character's active scene and private memories.
 - `context-builder.js` builds a bounded prompt from the active character card, related relationships, private memories, scene summary, and only recent **public** logs.
 - The model returns structured dialogue/action/emotion plus optional memory, relationship changes, and a scene progress signal.
 - Model and reasoning effort are resolved from character override → role default → server fallback and are sent on every `turn/start`; do not make thread history authoritative for runtime configuration.
@@ -74,10 +74,12 @@ Browser (index.html + app.js)
 
 1. `initialize`
 2. `initialized`
-3. `thread/start` on first use or `thread/resume` after reconnect
+3. `thread/start` on first use/rollover or `thread/resume` after reconnect
 4. `turn/start` with an `outputSchema`
 5. Parse the `turn/completed` notification's final `agentMessage` JSON
 6. Persist the successful character Event, cursor and thread link together
+
+Character and Director threads roll over at configured turn/context-token limits and reconstruct from PostgreSQL. Story calls use `SCENEWEAVER_AGENT_CWD`, a neutral directory outside this repository, so development instructions do not enter story context.
 
 Persistent story memory belongs in PostgreSQL, not in Codex thread history. See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for boundaries, visibility rules, and the turn lifecycle.
 
@@ -102,7 +104,7 @@ pg_isready
 
 ## Current known limitations / next priorities
 
-1. Character and event suggestions use Codex; project creation/deletion UI is not implemented.
+1. Character and event suggestions use Codex; project deletion and cross-world character import UI are not implemented.
 2. Memory retrieval currently uses importance and recency; semantic retrieval and consolidation are deferred.
 3. Auto-progress is browser-owned; a production runner should use server-side jobs and SSE.
 

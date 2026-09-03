@@ -10,8 +10,9 @@
     "seed": "node scripts/seed.js",
     "reset:demo": "node scripts/reset-demo.js",
     "db:setup": "npm run migrate && npm run seed",
-    "check": "node --check server.js && node --check progression-runner.js && node --check director-engine.js && node --check project-lifecycle.js && node --check world-builder.js && node --check runtime-settings.js && node --check story-dynamics.js && node --check story-repair.js && node --check runtime-telemetry.js && node --check story-engine.js && node --check context-builder.js && node --check speaker-selector.js && node --check orchestrator.js && node --check codex-client.js && node --check app.js && node --check monitor.js && node --check scripts/migrate.js && node --check scripts/seed.js && node --check scripts/reset-demo.js && node --check scripts/verify-api.js",
-    "verify:api": "node scripts/verify-api.js"
+    "check": "node --check server.js && node --check progression-runner.js && node --check director-engine.js && node --check project-lifecycle.js && node --check world-builder.js && node --check runtime-settings.js && node --check story-dynamics.js && node --check story-repair.js && node --check runtime-telemetry.js && node --check story-engine.js && node --check context-builder.js && node --check speaker-selector.js && node --check orchestrator.js && node --check codex-client.js && node --check app.js && node --check monitor.js && node --check scripts/migrate.js && node --check scripts/seed.js && node --check scripts/reset-demo.js && node --check scripts/verify-api.js && node --check scripts/verify-latency-logic.js",
+    "verify:api": "node scripts/verify-api.js",
+    "verify:latency-logic": "node scripts/verify-latency-logic.js"
   },
   "dependencies": {
     "dotenv": "^16.6.1",

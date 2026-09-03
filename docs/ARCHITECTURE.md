@@ -15,7 +15,7 @@ One project is one `World` and one continuous history. PostgreSQL is authoritati
 - `event_suggestion_batches`: manual ideas and Director major-decision batches
 - `story_repair_proposals`: previewable continuity repairs for legacy worlds
 
-Every WorldCharacter keeps at most one active Codex thread. The server starts it on first response, uses `turn/start` thereafter, resumes it after app-server reconnect, and reconstructs it from PostgreSQL when unavailable. The World Director and each active World Builder draft likewise have their own persistent thread. One-shot character suggestions clean up their temporary thread.
+Every WorldCharacter keeps at most one active Codex thread. The server starts it on first response, uses `turn/start` thereafter, resumes it after app-server reconnect, and reconstructs it from PostgreSQL when unavailable. Character threads roll over after 12 turns or 50,000 context tokens; the Director rolls over after 8 turns or 80,000 context tokens. The limits are configurable, and rollover hydrates a new thread from PostgreSQL. Story calls use a neutral workspace so repository coding instructions do not enter their context. The World Director and each active World Builder draft likewise have their own persistent thread. One-shot character suggestions clean up their temporary thread.
 
 ## Story dynamics
 
@@ -26,12 +26,12 @@ The user selects `gentle`, `balanced`, or `high` per world. This controls Direct
 ## Progression lifecycle
 
 1. Acquire the project advisory lock and load active Scene, participants and story state.
-2. For STORY, ask the persistent Director for a progression plan every operation. For CHAT, ask on a settled/stalled scene or after the intensity cadence (8/5/3 events).
-3. The Director chooses `CONTINUE`, `INJECT_MINOR_EVENT`, `TRANSITION_SCENE`, or `PROPOSE_MAJOR`, updates bounded story/scene state, and chooses one or two responders.
+2. Reuse a valid queued Director plan for its second responder. Otherwise, for STORY ask the persistent Director for a new plan; for CHAT ask on a settled/stalled scene or after the intensity cadence (8/5/3 events).
+3. The Director chooses `CONTINUE`, `INJECT_MINOR_EVENT`, `TRANSITION_SCENE`, or `PROPOSE_MAJOR`, returns a compact story-state patch plus scene state, and queues one or two responders. A later user/Director event or non-continue scene signal invalidates the remaining responder.
 4. Minor events and scene transitions are stored transactionally before character generation. A transition and the first response occur within the same durable progression operation.
 5. Major proposals are stored without changing history; the operation completes with `awaitingDecision` and no character is called.
-6. For each chosen responder, retrieve newly visible Events and up to six active private memories, build the bounded character prompt, and call its persistent thread serially.
-7. Validate structured output, including whether the character honored the planned beat result and supplied a real condition/cost for qualified success or setback. In one transaction store the response, beat result, current character state, directed relationship changes, qualifying private memory and event cursor.
+6. Each progression operation consumes only the next queued responder, retrieves newly visible Events and up to six active private memories, builds the bounded character prompt, and calls that character's persistent thread. The following browser operation can consume the second responder without another Director call.
+7. Validate the compact character-state patch, including whether the character honored the planned beat result and supplied a real condition/cost for qualified success or setback. In one transaction merge and store current character state, the response, beat result, directed relationship changes, qualifying private memory, event cursor, and remaining responder queue.
 
 If Codex times out or the app-server disconnects during a character step, the runner retries that generation once with a fresh app-server connection. A still-failing operation remains durable and can be resumed with `POST /api/operations/:id/retry`; completed Director events, scene transitions and character steps are reused instead of being generated twice.
 
@@ -39,7 +39,7 @@ A character response no longer directly completes and transitions a Scene. The D
 
 ## Memory and state-change policy
 
-Character output proposes a complete next current-state snapshot, 0–100 memory importance, directed relationship label/score changes, and public response. Memories below 60 are not stored. Exact and token-similar duplicates are skipped, and only the twelve strongest active memories per character remain active; older/weaker rows are archived, not deleted. State changes are audited through `character_change_proposals` after validation and application.
+Character output proposes a compact current-state patch, 0–100 memory importance, directed relationship label/score changes, and public response. The server merges the patch into authoritative DB state and keeps before/after snapshots only in the state-change audit. Memories below 60 are not stored. Exact and token-similar duplicates are skipped, and only the twelve strongest active memories per character remain active; older/weaker rows are archived, not deleted. State changes are audited through `character_change_proposals` after validation and application.
 
 ## Legacy-world repair
 
@@ -59,7 +59,7 @@ The browser never receives Codex credentials or direct app-server access. Codex 
 
 ## Observability
 
-Runtime telemetry is redacted and in-memory. The monitor shows active character/Director/World Builder threads, model and effort, continuous timing charts, Director-plan timing, Director action, and tension before/after. Prompts, secrets, dialogue under generation and memory text are never exposed.
+Runtime telemetry is redacted and in-memory. The monitor shows active character/Director/World Builder threads, model and effort, thread turn/context-token counts, continuous timing charts, time to first token, Director-plan timing, Director action, and tension before/after. Prompts, secrets, dialogue under generation and memory text are never exposed.
 
 ## Deferred work
 

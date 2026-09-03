@@ -53,7 +53,7 @@ hostname -I
 
 ## Codex app-server 연결 구조
 
-브라우저가 Codex app-server에 직접 연결하지 않습니다. Ubuntu의 서버가 하나의 app-server 프로세스를 재사용하며, 각 생성 요청에는 새 thread를 사용합니다. 캐릭터 정체성·기억과 이야기 상태의 기준은 PostgreSQL입니다.
+브라우저가 Codex app-server에 직접 연결하지 않습니다. Ubuntu의 서버가 하나의 app-server 프로세스를 재사용하며, 캐릭터와 World Director는 각자 활성 thread를 재사용합니다. 캐릭터 정체성·기억과 이야기 상태의 기준은 PostgreSQL입니다.
 
 ```text
 Browser UI → App API / DB → Codex app-server (stdio JSON-RPC)
@@ -71,7 +71,7 @@ CODEX_HOME="$HOME/.codex-sceneweaver" codex login status
 codex --version
 ```
 
-이 프로젝트는 `.env`의 `CODEX_MODEL`과 `CODEX_TURN_TIMEOUT_MS`로 Codex 모델 및 최대 턴 시간을 설정합니다. app-server 프로세스는 재사용하고 생성 요청마다 새 Codex thread를 만듭니다. 캐릭터의 영구 기억은 thread가 아니라 PostgreSQL의 캐릭터·관계·장면·개인 기억 테이블에서 관리됩니다.
+이 프로젝트는 `.env`의 `CODEX_MODEL`과 `CODEX_TURN_TIMEOUT_MS`로 Codex 모델 및 최대 턴 시간을 설정합니다. 활성 thread는 정해진 턴/문맥 토큰 한도까지 재사용한 뒤 DB 상태로 새 thread를 구성합니다. 캐릭터의 영구 기억은 thread가 아니라 PostgreSQL의 캐릭터·관계·장면·개인 기억 테이블에서 관리됩니다.
 
 ```json
 {

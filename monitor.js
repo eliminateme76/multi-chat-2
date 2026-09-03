@@ -52,7 +52,9 @@ function allTrackedThreads() {
 }
 
 function renderActiveThread() {
-  const active = allTrackedThreads().find((thread) => thread.status === 'running');
+  const runningThreadId = selectedRuns().flatMap((item) => item.stages || []).findLast((stage) => stage.status === 'running' && stage.metadata?.threadId)?.metadata?.threadId;
+  const trackedThreads = allTrackedThreads();
+  const active = trackedThreads.find((thread) => thread.threadId === runningThreadId) || trackedThreads.find((thread) => thread.status === 'running');
   const run = selectedRuns().find((item) => item.status === 'running');
   const banner = $('#active-call-banner');
   const title = $('#active-thread-title');
@@ -123,7 +125,8 @@ function renderThreads() {
     const status = thread.conversationIdle ? '대화 종료' : ({ running: '실행 중', idle: '대기', completed: '일회성 완료', failed: '실패' })[thread.status] || '대기';
     const statusClass = thread.status === 'idle' ? 'completed' : thread.status;
     const owner = thread.kind === 'director' ? '월드 디렉터' : thread.kind === 'world_builder' ? '월드 설계자' : thread.kind === 'character' ? `캐릭터 · ${thread.name}` : thread.name;
-    const runtime = `${thread.detail || thread.model || '기본 모델'}${thread.effort ? ` · ${thread.effort}` : ''}`;
+    const usage = thread.turnCount != null ? ` · ${thread.turnCount}턴${Number(thread.contextTokens || 0) ? ` · 문맥 ${Number(thread.contextTokens).toLocaleString()} tokens` : ''}${thread.rolloverRequired ? ' · 다음 호출 교체' : ''}` : '';
+    const runtime = `${thread.detail || thread.model || '기본 모델'}${thread.effort ? ` · ${thread.effort}` : ''}${usage}`;
     const detail = thread.kind === 'character' ? `캐릭터 스레드 · ${runtime}${thread.conversationIdle && thread.idleReason ? ` · ${thread.idleReason}` : ''}` : runtime;
     return `<div class="thread-item ${thread.status}"><div><strong>${esc(owner)}</strong><span class="status-${statusClass}">${status}</span></div><code title="${esc(thread.threadId)}">${esc(compactId)}</code><small>${esc(detail)}</small></div>`;
   };

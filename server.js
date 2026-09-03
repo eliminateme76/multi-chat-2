@@ -210,6 +210,7 @@ app.get('/api/runtime/threads', async (req, res, next) => {
     const projectId = projectIdFrom(req);
     const result = await pool.query(`SELECT 'character' AS kind,c.id AS "characterId",c.name,c.active_thread_id AS "threadId",
       COALESCE(c.model_override,p.default_model) AS model,COALESCE(c.reasoning_effort_override,p.default_reasoning_effort) AS effort,c.updated_at AS "updatedAt",
+      c.active_thread_turn_count AS "turnCount",c.active_thread_context_tokens AS "contextTokens",c.thread_rollover_required AS "rolloverRequired",
       s.id AS "operationStepId",s.status AS "operationStepStatus",o.id AS "operationId",
       sp.idle_at_sequence AS "idleAtSequence",sp.idle_reason AS "idleReason",
       (sp.idle_at_sequence IS NOT NULL AND sp.idle_at_sequence >= COALESCE(last_entry.sequence,0)) AS "conversationIdle"
@@ -223,12 +224,13 @@ app.get('/api/runtime/threads', async (req, res, next) => {
       WHERE c.project_id=$1 AND c.active_thread_id IS NOT NULL
       UNION ALL
       SELECT 'director' AS kind,NULL AS "characterId",'월드 디렉터' AS name,p.active_director_thread_id AS "threadId",
-        COALESCE(p.director_model,p.default_model) AS model,p.director_reasoning_effort AS effort,p.updated_at AS "updatedAt",NULL AS "operationStepId",NULL AS "operationStepStatus",NULL AS "operationId",
+        COALESCE(p.director_model,p.default_model) AS model,p.director_reasoning_effort AS effort,p.updated_at AS "updatedAt",
+        p.director_thread_turn_count AS "turnCount",p.director_thread_context_tokens AS "contextTokens",p.director_thread_rollover_required AS "rolloverRequired",NULL AS "operationStepId",NULL AS "operationStepStatus",NULL AS "operationId",
         NULL::bigint AS "idleAtSequence",NULL::text AS "idleReason",FALSE AS "conversationIdle"
       FROM projects p WHERE p.id=$1 AND p.active_director_thread_id IS NOT NULL
       UNION ALL
       SELECT 'world_builder' AS kind,NULL AS "characterId",'월드 설계자' AS name,d.thread_id AS "threadId",
-        d.model,d.reasoning_effort AS effort,d.updated_at AS "updatedAt",NULL AS "operationStepId",NULL AS "operationStepStatus",NULL AS "operationId",
+        d.model,d.reasoning_effort AS effort,d.updated_at AS "updatedAt",NULL::integer AS "turnCount",NULL::bigint AS "contextTokens",FALSE AS "rolloverRequired",NULL AS "operationStepId",NULL AS "operationStepStatus",NULL AS "operationId",
         NULL::bigint AS "idleAtSequence",NULL::text AS "idleReason",FALSE AS "conversationIdle"
       FROM world_creation_drafts d WHERE d.source_project_id=$1 AND d.status='ACTIVE' AND d.thread_id IS NOT NULL`, [projectId]);
     res.json({ threads: result.rows.map((thread) => ({ ...thread, status: thread.operationStepStatus === 'RUNNING' ? 'running' : 'idle' })) });
