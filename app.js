@@ -17,6 +17,8 @@ let worldDraftBusy = false;
 let worldDraftDirty = false;
 let runtimeSettings = null;
 let runtimeSettingsBusy = false;
+let turnActivity = { key: 'idle', status: 'idle', agent: 'READY', phase: '다음 턴 준비', totalStartedAt: 0, phaseStartedAt: 0, totalElapsedMs: 0 };
+let turnActivityTimer = null;
 const ALL_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
 const $ = (selector) => document.querySelector(selector);
 const esc = (text) => String(text).replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
@@ -68,6 +70,52 @@ function setDirectorTab(tab) {
   document.querySelectorAll('[data-director-panel]').forEach((panel) => { panel.hidden = panel.dataset.directorPanel !== tab; });
 }
 function setToolsOpen(open) { document.body.classList.toggle('tools-open', open); }
+function formatElapsed(milliseconds) {
+  const seconds = Math.max(0, Math.floor(milliseconds / 1000));
+  return seconds < 60 ? `${seconds}초` : `${Math.floor(seconds / 60)}분 ${String(seconds % 60).padStart(2, '0')}초`;
+}
+function renderTurnActivity() {
+  const container = $('#turn-runtime');
+  if (!container) return;
+  const now = Date.now();
+  const running = turnActivity.status === 'running';
+  const stageElapsed = running ? now - turnActivity.phaseStartedAt : 0;
+  const totalElapsed = running ? now - turnActivity.totalStartedAt : turnActivity.totalElapsedMs;
+  container.dataset.status = turnActivity.status;
+  $('#turn-runtime-agent').textContent = turnActivity.agent;
+  $('#turn-runtime-phase').textContent = turnActivity.phase;
+  const time = $('#turn-runtime-time');
+  if (running) {
+    const showTotal = turnActivity.key !== 'preparing' && stageElapsed + 2000 < totalElapsed;
+    time.textContent = showTotal ? `${formatElapsed(stageElapsed)} · 전체 ${formatElapsed(totalElapsed)}` : formatElapsed(totalElapsed);
+  } else if (turnActivity.status === 'completed' || turnActivity.status === 'failed' || turnActivity.status === 'waiting') {
+    time.textContent = turnActivity.totalElapsedMs ? `총 ${formatElapsed(totalElapsed)}` : '';
+  } else time.textContent = '';
+  time.hidden = !time.textContent;
+}
+function beginTurnActivity() {
+  const now = Date.now();
+  turnActivity = { key: 'preparing', status: 'running', agent: 'TURN', phase: '진행 준비 중', totalStartedAt: now, phaseStartedAt: now, totalElapsedMs: 0 };
+  if (turnActivityTimer) clearInterval(turnActivityTimer);
+  turnActivityTimer = setInterval(renderTurnActivity, 1000);
+  renderTurnActivity();
+}
+function setTurnStage(key, agent, phase) {
+  if (turnActivity.status !== 'running') beginTurnActivity();
+  const changed = turnActivity.key !== key;
+  turnActivity = { ...turnActivity, key, agent, phase, phaseStartedAt: changed ? Date.now() : turnActivity.phaseStartedAt };
+  renderTurnActivity();
+}
+function finishTurnActivity(phase, status = 'completed') {
+  const now = Date.now();
+  if (turnActivityTimer) clearInterval(turnActivityTimer);
+  turnActivityTimer = null;
+  turnActivity = {
+    ...turnActivity, key: status, status, agent: status === 'failed' ? 'ERROR' : status === 'waiting' ? 'ACTION' : 'DONE', phase,
+    totalElapsedMs: turnActivity.totalStartedAt ? now - turnActivity.totalStartedAt : 0
+  };
+  renderTurnActivity();
+}
 function renderTurnControls() {
   const advanceButton = $('#advance-button');
   advanceButton.disabled = turnInFlight || !state;
@@ -77,6 +125,7 @@ function renderTurnControls() {
   autoButton.classList.toggle('is-active', autoEnabled);
   autoButton.setAttribute('aria-pressed', String(autoEnabled));
   $('#auto-state').textContent = autoEnabled ? 'ON' : 'OFF';
+  renderTurnActivity();
 }
 function render() {
   $('#world-title').textContent = state.world.title; $('#scene-number').textContent = String(state.sceneNumber).padStart(2, '0'); $('#scene-location-compact').textContent = state.world.location; $('#scene-location').textContent = state.world.location; $('#scene-description').textContent = state.world.description; $('#scene-time').textContent = state.world.time; $('#scene-mood').textContent = state.world.mood; $('#scene-mood-compact').textContent = state.world.mood; $('#director-note').textContent = state.directorNote; renderTurnControls(); setDirectorTab(directorTab);
@@ -122,7 +171,7 @@ function scheduleAutoTurn(delay = 1000) {
 async function advanceTurn() {
   if (turnInFlight || !state) return false;
   turnInFlight = true;
-  $('#save-status').textContent = '다음 턴 생성 중…';
+  beginTurnActivity();
   renderTurnControls();
   try {
     const participants = (await api('/api/participants')).participants;
@@ -136,13 +185,17 @@ async function advanceTurn() {
       const runningStep = operation.steps?.find((step) => step.status === 'RUNNING');
       const actualTypingCharacter = runningStep ? participants.find((character) => character.id === runningStep.characterId) || characterById(runningStep.characterId) || { id: runningStep.characterId, name: runningStep.characterName } : null;
       if (typingCharacter?.id !== actualTypingCharacter?.id) { typingCharacter = actualTypingCharacter; render(); }
-      if (runningStep) $('#save-status').textContent = `${runningStep.characterName} · 응답 생성 중…`;
-      else if (!operation.steps?.length) $('#save-status').textContent = '월드 디렉터 · 세계 상황 판단 중…';
+      if (runningStep) setTurnStage(`character:${runningStep.characterId}`, `CHARACTER · ${runningStep.characterName}`, '응답 생성 중');
+      else if (!operation.steps?.length) setTurnStage('director', 'WORLD DIRECTOR', '세계 상황 판단 중');
+      else if (operation.steps.some((step) => step.status === 'QUEUED')) {
+        const queuedStep = operation.steps.find((step) => step.status === 'QUEUED');
+        setTurnStage(`character-queued:${queuedStep.characterId}`, `CHARACTER · ${queuedStep.characterName}`, '응답 준비 중');
+      }
       const completedNow = operation.steps?.filter((step) => step.status === 'COMPLETED').length || 0;
       if (completedNow > completedStepCount && operation.status !== 'COMPLETED') {
         completedStepCount = completedNow;
         setState(await api('/api/state'));
-        $('#save-status').textContent = '응답 저장 완료 · 진행 마무리 중…';
+        setTurnStage('finalizing', 'TURN', '응답 저장 · 진행 마무리 중');
       }
       if (operation.status === 'COMPLETED' || operation.status === 'FAILED') break;
       await new Promise((resolve) => setTimeout(resolve, runningStep ? 500 : 1000));
@@ -155,19 +208,18 @@ async function advanceTurn() {
     if (messagesCreated > 0) consecutiveSilentTurns = 0;
     else {
       consecutiveSilentTurns += 1;
-      $('#save-status').textContent = '이번 진행에서는 새 메시지가 없었습니다.';
     }
     if (operation.result?.awaitingDecision || nextState.pendingMajorDecision) {
       stopAutoProgress(); setDirectorTab('events'); setToolsOpen(true);
-      $('#save-status').textContent = '중대 전개 선택 대기 중';
+      finishTurnActivity('중대 전개 선택 대기', 'waiting');
     } else if (nextState.conversationSettled) {
       stopAutoProgress();
-      $('#save-status').textContent = '현재 대화 종료 · Director가 다음 진행을 판단합니다.';
-    }
+      finishTurnActivity('현재 대화 종료', 'waiting');
+    } else finishTurnActivity(messagesCreated > 0 ? '턴 완료' : '새 메시지 없이 완료');
     return true;
   } catch (error) {
     stopAutoProgress();
-    $('#save-status').textContent = '진행 실패';
+    finishTurnActivity('진행 실패', 'failed');
     alert(error.message);
     return false;
   } finally {

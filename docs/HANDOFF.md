@@ -27,6 +27,7 @@ Last updated: 2026-09-03 (Asia/Seoul)
 - Added configurable character/Director thread rollover by turn count and context tokens. Existing threads are marked for one rollover, and successful calls persist turn/token counts transactionally before the old thread is cleaned up.
 - Story model calls now use a neutral `SCENEWEAVER_AGENT_CWD`, preventing repository development instructions from consuming story context. Runtime telemetry records time-to-first-token and token counts, and the monitor shows persistent-thread turn/context usage.
 - The play UI distinguishes World Director judgment from character generation while polling and can refresh after a completed response before operation finalization.
+- Moved live turn execution state out of the top-bar persistence label and into a two-row control beside `다음 턴 진행` / `자동 진행`. It shows the active World Director or character, current-stage elapsed time, total elapsed time after stage changes, and the completed/failed/waiting result duration.
 - Fixed playthrough cloning's ambiguous PostgreSQL parameter cast, which previously made `POST /api/projects/clone` fail before inserting cloned characters.
 - Added world-specific drama intensity and durable story/Scene/character dramatic state.
 - Replaced the browser's random 12-message automatic-event picker with a persistent World Director state: continue, minor event, scene transition, or user-approved major proposal.

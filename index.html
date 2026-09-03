@@ -39,9 +39,17 @@
           </div>
           <div id="conversation-log" class="conversation-log" aria-live="polite"></div>
           <div class="conversation-controls floating-controls">
-            <button id="advance-button" class="primary-button"><span>✦</span> 다음 턴 진행</button>
-            <button id="auto-button" class="secondary-button">자동 진행 <span id="auto-state">OFF</span></button>
-            <button id="open-tools-button" class="secondary-button tools-button" type="button">도구</button>
+            <div id="turn-runtime" class="turn-runtime" data-status="idle">
+              <i class="turn-runtime-dot" aria-hidden="true"></i>
+              <span id="turn-runtime-agent" class="turn-runtime-agent">READY</span>
+              <strong id="turn-runtime-phase">다음 턴 준비</strong>
+              <time id="turn-runtime-time" aria-hidden="true"></time>
+            </div>
+            <div class="turn-actions">
+              <button id="advance-button" class="primary-button"><span>✦</span> 다음 턴 진행</button>
+              <button id="auto-button" class="secondary-button">자동 진행 <span id="auto-state">OFF</span></button>
+              <button id="open-tools-button" class="secondary-button tools-button" type="button">도구</button>
+            </div>
           </div>
         </section>
 
