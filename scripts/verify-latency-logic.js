@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { buildCharacterTurnPrompt } from '../context-builder.js';
-import { applyCharacterStatePatch, applyStoryStatePatch, cleanDramaticState } from '../story-dynamics.js';
+import { applyCharacterStatePatch, applyStoryStatePatch, cleanDramaticState, findPendingWorldAttempt } from '../story-dynamics.js';
 
 const ids = ['character-a', 'character-b', 'character-c'];
 
@@ -40,6 +40,14 @@ assert.equal(queue.responsesConsumed, 1);
 assert.deepEqual(queue.planResponderIds, [ids[0], ids[1]]);
 assert.equal(queue.planRationale, '두 인물의 반응을 이어 본다.');
 
+const migratedWorldState = cleanDramaticState({ beatIntent: 'choice', outcomeConstraint: 'qualified_success', pressureSource: '문은 열렸지만 경보가 울렸다.', reliefReason: '' }, ids);
+assert.equal(migratedWorldState.worldPhase, 'choice');
+assert.equal(migratedWorldState.lastWorldOutcome, 'qualified_success');
+assert.equal(migratedWorldState.worldPressure, '문은 열렸지만 경보가 울렸다.');
+const attempt = { type: 'message', worldSequence: 9, payload: { actionScope: 'WORLD_ATTEMPT' }, action: '잠긴 문을 밀어 본다.' };
+assert.equal(findPendingWorldAttempt([attempt]), attempt);
+assert.equal(findPendingWorldAttempt([attempt, { type: 'event', actorType: 'DIRECTOR', worldSequence: 10 }]), null);
+
 const prompt = buildCharacterTurnPrompt({
   character: { id: ids[0], name: '가람', role: '탐정', gender: '여성', personality: '신중함', speechStyle: '짧은 존댓말', goal: '진실 찾기', secret: '없음', emotion: '집중', currentState: {} },
   state: { world: { title: '시험 세계', location: '서재', time: '밤', mood: '고요', description: '문을 조사한다.', rules: '' }, sceneSummary: '', publicDirection: '', presentationMode: 'scene', storyStatus: {}, dramaticState: {}, relationships: [], characters: [], logs: [{ type: 'event', eventType: '비공개', text: '절대 노출되면 안 됨' }] },
@@ -47,5 +55,8 @@ const prompt = buildCharacterTurnPrompt({
 });
 assert.match(prompt, /창문이 열려 있다/);
 assert.doesNotMatch(prompt, /절대 노출되면 안 됨/);
+assert.match(prompt, /독립적으로 결정/);
+assert.match(prompt, /WORLD_ATTEMPT/);
+assert.doesNotMatch(prompt, /요구되는 결과/);
 
 console.log('Latency logic verification passed.');

@@ -20,7 +20,7 @@ export async function getStoryState(queryable, projectId) {
     WHERE p.id=$1`, [projectId])).rows[0];
   if (!project || !project.sceneId) return null;
   const characters = await queryable.query(`SELECT c.id,c.name,c.role,c.gender,c.portrait_url AS "portraitUrl",c.portrait_position AS "portraitPosition",c.emoji,c.color,c.personality,c.speech_style AS "speechStyle",c.goal,c.secret,c.emotion,
-    active_thread_id AS "activeThreadId",active_thread_turn_count AS "activeThreadTurnCount",active_thread_context_tokens AS "activeThreadContextTokens",thread_rollover_required AS "threadRolloverRequired",
+    active_thread_id AS "activeThreadId",active_thread_turn_count AS "activeThreadTurnCount",active_thread_context_tokens AS "activeThreadContextTokens",thread_rollover_required AS "threadRolloverRequired",thread_contract_version AS "threadContractVersion",
     model_override AS "modelOverride",reasoning_effort_override AS "reasoningEffortOverride",
     COALESCE(model_override,p.default_model) AS "effectiveModel",COALESCE(reasoning_effort_override,p.default_reasoning_effort) AS "effectiveReasoningEffort",
     current_state AS "currentState",last_scanned_event_sequence AS "lastScannedEventSequence"
@@ -80,7 +80,7 @@ export async function buildTurnContext(queryable, projectId, runId) {
 
 export async function getActiveParticipants(queryable, projectId) {
   const result = await queryable.query(`SELECT c.id,c.name,c.role,c.gender,c.portrait_url AS "portraitUrl",c.portrait_position AS "portraitPosition",c.emoji,c.color,c.personality,c.speech_style AS "speechStyle",c.goal,c.secret,c.emotion,
-    c.active_thread_id AS "activeThreadId",c.active_thread_turn_count AS "activeThreadTurnCount",c.active_thread_context_tokens AS "activeThreadContextTokens",c.thread_rollover_required AS "threadRolloverRequired",
+    c.active_thread_id AS "activeThreadId",c.active_thread_turn_count AS "activeThreadTurnCount",c.active_thread_context_tokens AS "activeThreadContextTokens",c.thread_rollover_required AS "threadRolloverRequired",c.thread_contract_version AS "threadContractVersion",
     c.model_override AS "modelOverride",c.reasoning_effort_override AS "reasoningEffortOverride",
     COALESCE(c.model_override,p.default_model) AS "effectiveModel",COALESCE(c.reasoning_effort_override,p.default_reasoning_effort) AS "effectiveReasoningEffort",
     c.current_state AS "currentState",c.last_scanned_event_sequence AS "lastScannedEventSequence",
@@ -120,7 +120,7 @@ export async function persistGeneratedTurn(client, context, turn) {
   const persistThread = async (sequence) => client.query(`UPDATE characters SET active_thread_id=$2,
     active_thread_turn_count=CASE WHEN active_thread_id=$2 THEN active_thread_turn_count+1 ELSE 1 END,
     active_thread_context_tokens=CASE WHEN $4::bigint>0 THEN $4::bigint WHEN active_thread_id=$2 THEN active_thread_context_tokens ELSE 0 END,
-    thread_rollover_required=FALSE,last_scanned_event_sequence=$3,pending_operation_step_id=NULL,updated_at=NOW() WHERE id=$1`,
+    thread_rollover_required=FALSE,thread_contract_version=1,last_scanned_event_sequence=$3,pending_operation_step_id=NULL,updated_at=NOW() WHERE id=$1`,
   [character.id, turn.threadId, sequence, contextTokens]);
   if (!turn.shouldRespond) {
     const sequence = Number((await client.query('SELECT COALESCE(MAX(world_sequence),0) AS sequence FROM scene_entries WHERE scene_id=$1', [state.sceneId])).rows[0].sequence);
@@ -138,7 +138,7 @@ export async function persistGeneratedTurn(client, context, turn) {
   const relationshipChanges = turn.relationshipChanges.slice(0, 3).filter((change) => validTargets.has(change.targetId) && Number.isInteger(change.delta) && (change.delta !== 0 || change.label));
   await client.query("UPDATE scene_participants SET idle_at_sequence=NULL,idle_reason='',idle_at=NULL WHERE scene_id=$1 AND left_sequence IS NULL", [state.sceneId]);
   await client.query(`INSERT INTO scene_entries (id,project_id,scene_id,entry_type,character_id,dialogue,action,sort_order,world_sequence,actor_type,event_kind,payload)
-    VALUES ($1,$2,$3,'message',$4,$5,$6,$7,$8,'CHARACTER','CHARACTER_RESPONSE',$9)`, [entryId, state.projectId, state.sceneId, character.id, turn.dialogue, turn.action, await nextEntryOrder(client, state.sceneId), sequence, JSON.stringify({ dialogue: turn.dialogue, action: turn.action, emotion: turn.emotion, sceneSignal: turn.sceneSignal, beatOutcome: turn.beatOutcome, conditionOrCost: turn.conditionOrCost, statePatch: turn.statePatch, relationshipChanges })]);
+    VALUES ($1,$2,$3,'message',$4,$5,$6,$7,$8,'CHARACTER','CHARACTER_RESPONSE',$9)`, [entryId, state.projectId, state.sceneId, character.id, turn.dialogue, turn.action, await nextEntryOrder(client, state.sceneId), sequence, JSON.stringify({ dialogue: turn.dialogue, action: turn.action, actionScope: turn.actionScope, emotion: turn.emotion, sceneSignal: turn.sceneSignal, statePatch: turn.statePatch, relationshipChanges })]);
   await client.query(`INSERT INTO scene_entry_recipients(entry_id,character_id) SELECT $1,character_id FROM scene_participants WHERE scene_id=$2 AND left_sequence IS NULL ON CONFLICT DO NOTHING`, [entryId, state.sceneId]);
   await client.query('UPDATE characters SET emotion=$2,current_state=$3 WHERE id=$1', [character.id, turn.emotion, JSON.stringify(nextState)]);
   await persistThread(sequence);
@@ -170,7 +170,7 @@ export async function getDirectorContext(queryable, projectId) {
   const state = await getStoryState(queryable, projectId);
   if (!state) return null;
   const director = (await queryable.query(`SELECT active_director_thread_id AS "activeThreadId",director_thread_turn_count AS "activeThreadTurnCount",
-    director_thread_context_tokens AS "activeThreadContextTokens",director_thread_rollover_required AS "threadRolloverRequired",last_director_event_sequence AS "lastScannedEventSequence",
+    director_thread_context_tokens AS "activeThreadContextTokens",director_thread_rollover_required AS "threadRolloverRequired",director_thread_contract_version AS "threadContractVersion",last_director_event_sequence AS "lastScannedEventSequence",
     COALESCE(director_model,default_model) AS model,director_reasoning_effort AS "reasoningEffort"
     FROM projects WHERE id=$1`, [projectId])).rows[0];
   return { state, ...director };
@@ -182,7 +182,7 @@ export async function updateDirectorThread(client, projectId, runtime, sequence 
   await client.query(`UPDATE projects SET active_director_thread_id=$2,
     director_thread_turn_count=CASE WHEN active_director_thread_id=$2 THEN director_thread_turn_count+1 ELSE 1 END,
     director_thread_context_tokens=CASE WHEN $4::bigint>0 THEN $4::bigint WHEN active_director_thread_id=$2 THEN director_thread_context_tokens ELSE 0 END,
-    director_thread_rollover_required=FALSE,
+    director_thread_rollover_required=FALSE,director_thread_contract_version=1,
     last_director_event_sequence=COALESCE($3,(SELECT COALESCE(MAX(world_sequence),0) FROM scene_entries WHERE project_id=$1)),updated_at=NOW()
     WHERE id=$1`, [projectId, result.threadId, sequence, contextTokens]);
 }
@@ -195,7 +195,7 @@ export async function consumePlannedResponder(client, context, turn) {
     : current.plannedResponderIds.filter((id) => id !== context.character.id);
   const next = cleanDramaticState({
     ...current,
-    plannedResponderIds: turn.sceneSignal === 'continue' ? remaining : [],
+    plannedResponderIds: turn.sceneSignal === 'continue' && turn.actionScope !== 'WORLD_ATTEMPT' ? remaining : [],
     responsesConsumed: Number(current.responsesConsumed || 0) + 1
   }, context.state.characters.map((item) => item.id), current);
   await client.query('UPDATE scenes SET dramatic_state=$2,updated_at=NOW() WHERE id=$1', [context.state.sceneId, JSON.stringify(next)]);

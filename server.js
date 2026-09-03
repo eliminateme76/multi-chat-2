@@ -256,7 +256,8 @@ app.get('/api/runtime/director-plan', async (req, res, next) => {
     res.json({ plan: {
       sourceOperationId: dramatic.planOperationId || null, action: dramatic.planAction || null, rationale: dramatic.planRationale,
       sceneId: row.sceneId, sceneNumber: row.sceneNumber, planStartedSequence: Number(dramatic.planStartedSequence || 0),
-      beatPhase: dramatic.beatIntent || null, beatOutcome: dramatic.outcomeConstraint || null,
+      worldPhase: dramatic.worldPhase || dramatic.beatIntent || null, worldOutcome: dramatic.lastWorldOutcome || dramatic.outcomeConstraint || null,
+      worldPressure: dramatic.worldPressure || dramatic.pressureSource || '', worldRelief: dramatic.worldRelief || dramatic.reliefReason || '',
       responsesConsumed: Number(dramatic.responsesConsumed || 0), remainingResponderIds: invalidated ? [] : remainingIds,
       responders: responderIds.map((id) => ({ id, name: names.get(id) || id })), valid: !invalidated && remainingIds.length > 0,
       invalidated, latestOperation: latestOperation ? { id: latestOperation.id, status: latestOperation.status, reused: Boolean(latestOperation.result?.planReused ?? latestOperation.payload?.planReused), startedAt: latestOperation.startedAt, completedAt: latestOperation.completedAt } : null

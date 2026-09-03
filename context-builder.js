@@ -1,8 +1,9 @@
 function publicLog(log, state, includeOutcome = false) {
   if (log.type === 'event') return `[공개 사건 · ${log.eventType || '일반'}] ${log.text || log.eventText || ''}`;
   const speaker = state.characters.find((item) => item.id === log.characterId)?.name || '알 수 없는 인물';
-  const outcome = includeOutcome && log.payload?.beatOutcome ? `\n(서사 결과: ${log.payload.beatOutcome}${log.payload.conditionOrCost ? ` · 조건/대가: ${log.payload.conditionOrCost}` : ''})` : '';
-  return `[${speaker}] ${log.text}\n(행동: ${log.action})${outcome}`;
+  const outcome = includeOutcome && log.payload?.beatOutcome ? `\n(과거 형식의 캐릭터 자체 평가: ${log.payload.beatOutcome}${log.payload.conditionOrCost ? ` · 조건/대가: ${log.payload.conditionOrCost}` : ''})` : '';
+  const pendingAttempt = includeOutcome && log.payload?.actionScope === 'WORLD_ATTEMPT' ? '\n(외부 결과가 아직 확정되지 않은 행동 시도)' : '';
+  return `[${speaker}] ${log.text}\n(행동: ${log.action})${outcome}${pendingAttempt}`;
 }
 
 export function buildCharacterTurnPrompt({ character, state, memories = [], visibleEvents = [], recentVisibleEvents = [] }) {
@@ -41,10 +42,8 @@ export function buildCharacterTurnPrompt({ character, state, memories = [], visi
 - 공개 진행 지시: ${state.publicDirection || '현재 상황에 자연스럽게 반응하세요.'}
 - 현재 장면 목표: ${state.storyStatus?.objective || '현재 상황을 구체적으로 한 단계 움직입니다.'}
 - 현재 딜레마: ${state.storyStatus?.dilemma || '없음'}
-- 이번 비트 의도: ${state.dramaticState?.beatIntent || 'build'}
-- 요구되는 결과: ${state.dramaticState?.outcomeConstraint || 'open'}
-- 구체적인 조건·대가: ${state.dramaticState?.pressureSource || '없음'}
-- 안도 또는 보상의 근거: ${state.dramaticState?.reliefReason || '없음'}
+- 세계의 현재 국면: ${state.dramaticState?.worldPhase || 'build'}
+- 세계가 이미 확정한 제약·결과: ${state.dramaticState?.worldPressure || '없음'}
 
 이 캐릭터만 가진 관련 기억:
 ${memoryText || '- 아직 저장된 개인 기억이 없습니다.'}
@@ -56,14 +55,14 @@ ${publicHistory || '아직 공개 로그가 없습니다.'}
 1. 공개 정보, 자신의 카드와 자신의 기억만 사용하세요.
 2. 다른 캐릭터의 목표·비밀·기억 또는 비공개 Director 상태를 아는 척하지 마세요.
 3. ${outputStyle}
-4. shouldRespond=true일 때만 현재 장면을 움직이는 관찰, 질문, 선택 또는 행동을 하나 포함하세요. "다음 장면으로 가자"처럼 메타적인 장면 전환을 제안하지 말고, 현재 장면 안에서 결말·반응·선택을 표현하세요. 장면 전환은 World Director만 수행합니다.
-5. statePatch에는 실제로 바뀐 상태만 기록하세요. 목표·내적 갈등을 유지하면 setCurrentGoal/setInternalConflict는 null, 목록 변경이 없으면 각 배열은 비웁니다. 제거 항목은 기존 문자열과 정확히 같아야 합니다. 급격한 인격 변화나 초기 설정 재작성은 금지합니다.
-6. memory는 오래 유지할 가치가 있는 새 사실만 한 문장으로 작성하세요. 단순 감정 반복이나 이미 기억에 있는 내용이면 비우세요. 중요도는 0~100이며 저장할 가치가 충분할 때만 60 이상을 사용하세요.
-7. relationshipChanges에는 공개된 상호작용으로 실제 변화가 생긴 경우만 -10~10 delta, 변경 뒤 관계 설명 label, 근거 reason을 작성하세요.
-8. beatOutcome은 요구되는 결과와 같아야 합니다. qualified_success는 수락·성공과 함께 실제 조건이나 책임을 남기고, setback은 시도가 실제로 막힐 때만 사용합니다. 이 두 결과에서는 conditionOrCost를 구체적으로 작성하세요.
-9. success나 release 비트에서는 억지 문제를 새로 만들지 말고 보상을 충분히 보여 줄 수 있습니다. 다만 직전 대사를 단순히 다시 확인하지 마세요.
-10. sceneSignal은 계속 진행이면 continue, 반복되어 개입이 필요하면 stalled, 현재 장면 목표가 끝났으면 complete입니다.
-11. shouldRespond=false이면 memory는 빈 문자열, memoryImportance는 0, relationshipChanges와 statePatch의 배열은 빈 배열, 두 set 필드는 null, beatOutcome은 open, conditionOrCost는 빈 문자열, sceneSignal은 continue입니다.
+4. 무엇을 말하고 무엇을 시도할지는 성격·목표·관계·기억에 따라 독립적으로 결정하세요. 제안의 수락·거절·회피·조건 제시 중 어느 것도 미리 정해져 있지 않습니다.
+5. 자신의 대사, 감정, 의도와 직접 통제 가능한 몸짓은 확정할 수 있지만 타인의 반응, 우연, 환경 변화, 행동의 외부 성공 여부는 확정하지 마세요. actionScope는 행동이 없으면 NONE, 자신의 몸짓처럼 결과까지 직접 통제하면 SELF, 성공 여부를 세계가 판정해야 하는 시도면 WORLD_ATTEMPT입니다. WORLD_ATTEMPT의 action에는 시도만 쓰고 성공·실패 결과를 쓰지 마세요.
+6. shouldRespond=true일 때 현재 장면을 움직이는 관찰, 질문, 선택 또는 행동을 하나 포함하세요. "다음 장면으로 가자"처럼 메타적인 장면 전환을 제안하지 마세요. 시간·장소 전환과 외부 결과는 World Director만 확정합니다.
+7. statePatch에는 실제로 바뀐 상태만 기록하세요. 목표·내적 갈등을 유지하면 setCurrentGoal/setInternalConflict는 null, 목록 변경이 없으면 각 배열은 비웁니다. 제거 항목은 기존 문자열과 정확히 같아야 합니다. 급격한 인격 변화나 초기 설정 재작성은 금지합니다.
+8. memory는 오래 유지할 가치가 있는 새 사실만 한 문장으로 작성하세요. 단순 감정 반복이나 이미 기억에 있는 내용이면 비우세요. 중요도는 0~100이며 저장할 가치가 충분할 때만 60 이상을 사용하세요.
+9. relationshipChanges에는 이 캐릭터가 상대를 바라보는 관계가 실제로 변한 경우만 -10~10 delta, 변경 뒤 관계 설명 label, 근거 reason을 작성하세요. 상대 캐릭터의 감정이나 관계를 대신 바꾸지 마세요.
+10. sceneSignal은 캐릭터의 관점에서 계속 반응할 것이 있으면 continue, 세계의 개입이 필요하면 stalled, 자신이 보기에 현재 질문이 끝났으면 complete입니다. 이는 Director가 다음 진행에서 검토할 의견이며 장면을 직접 전환하지 않습니다.
+11. shouldRespond=false이면 actionScope는 NONE이고 memory는 빈 문자열, memoryImportance는 0, relationshipChanges와 statePatch의 배열은 빈 배열, 두 set 필드는 null, sceneSignal은 continue입니다.
 12. 출력은 지정된 JSON schema만 만족해야 합니다.`;
 }
 
@@ -74,7 +73,8 @@ export function buildDirectorProgressionPrompt(state, participants) {
     balanced: '목표 긴장도 40~70. 장면마다 상충하는 욕구나 실제 대가를 하나 이상 유지하세요.',
     high: '목표 긴장도 60~90. 시간 압박, 관계 역전, 계획 실패를 적극 사용하되 중대 사건은 승인받으세요.'
   };
-  return `당신은 한국어 인터랙티브 스토리의 World Director입니다. DB 상태가 기준이며, 이번 진행의 드라마 계획과 실제 응답자를 함께 결정하세요.
+  const pendingAttempt = [...state.logs].reverse().find((entry) => entry.type === 'message' && entry.payload?.actionScope === 'WORLD_ATTEMPT' && !state.logs.some((later) => Number(later.worldSequence || 0) > Number(entry.worldSequence || 0) && later.type === 'event' && later.actorType === 'DIRECTOR'));
+  return `당신은 한국어 인터랙티브 스토리의 World Director, 즉 세계의 외부 사건·인과관계·행동 결과를 판정하는 실행자입니다. DB 상태가 기준입니다. 캐릭터의 선택을 대신 쓰지 마세요.
 
 - 월드: ${state.world.title}
 - 강도: ${state.dramaIntensity} · ${intensityRules[state.dramaIntensity] || intensityRules.balanced}
@@ -83,24 +83,26 @@ export function buildDirectorProgressionPrompt(state, participants) {
 - 장면 신호: ${state.sceneSignal}
 - 구조화된 이야기 상태: ${JSON.stringify(state.storyState || {})}
 - 구조화된 장면 상태: ${JSON.stringify(state.dramaticState || {})}
+- 미판정 캐릭터 행동: ${pendingAttempt ? `${state.characters.find((item) => item.id === pendingAttempt.characterId)?.name || '캐릭터'} · ${pendingAttempt.action}` : '없음'}
 - 참여자:\n${participants.map((item) => `${item.id} | ${item.name} | ${item.role} | ${item.emotion} | ${JSON.stringify(item.currentState || {})}`).join('\n')}
 - 최근 공개 진행:\n${history || '없음'}
 
 action 규칙:
-1. CONTINUE: 현재 장면 안에서 응답자를 1~2명 선택합니다. STORY에서 같은 비트에 상대의 반응까지 자연스럽게 이어질 수 있으면 2명을 순서대로 선택하고, 독백·단독 행동처럼 한 사람만 필요한 경우에만 1명을 선택하세요.
-2. INJECT_MINOR_EVENT: 되돌릴 수 있는 구체적 장애나 선택을 즉시 넣고 그 사건에 반응할 응답자를 선택합니다.
-3. TRANSITION_SCENE: 현재 목표가 실제로 끝났을 때만 새 Scene을 설계합니다. nextScene participantIds에는 실제 현장에 있는 인물만 넣고 responders도 그 안에서 고릅니다.
+1. CONTINUE: 새 외부 사건이나 판정 없이 현재 상황에 반응할 기회가 있는 캐릭터를 1~2명 고릅니다. 같은 상황을 함께 인지한 상대가 자연스럽게 반응할 수 있을 때만 2명을 고르세요.
+2. INJECT_MINOR_EVENT: 되돌릴 수 있는 외부 사건을 발생시키거나 미판정 행동의 성공·부분 성공·실패와 현실적 결과를 사건으로 확정합니다. 미판정 행동이 있으면 CONTINUE하지 말고 우선 결과를 판정하세요.
+3. TRANSITION_SCENE: 시간·장소·상황의 의미 있는 단절이 실제로 발생할 때만 새 Scene을 설계합니다. 단지 짧은 문답이나 작은 목표 하나가 끝났다는 이유로 전환하지 마세요. 고정된 최소 대사 수는 없으며 자연스러운 완결성을 판단하세요.
 4. PROPOSE_MAJOR: 죽음, 영구 부상·이탈, 중대한 비밀 폭로, 관계 파기, 세계 설정 변경처럼 되돌리기 어려운 전개가 필요할 때만 사용하고 서로 다른 2~3개 안과 각각의 대가를 작성합니다. 자동 적용하지 않습니다.
 5. 한 캐릭터의 complete 신호만 믿지 말고 미해결 질문과 선택이 남았는지 검토하세요.
-6. beatPlan.phase는 build/pressure/choice/consequence/release, outcome은 open/success/qualified_success/setback 중 하나입니다. 평온한 성공과 release를 정상적인 전개로 취급하세요.
+6. worldResolution.phase는 지금 세계의 국면을 build/pressure/choice/consequence/release로 평가합니다. outcome은 이미 벌어진 최근 진행 또는 이번에 확정하는 세계 사건의 결과를 open/success/qualified_success/setback으로 평가합니다. 앞으로 응답할 캐릭터가 어떤 선택을 할지는 예측하거나 강제하지 마세요.
 7. 긴장은 파동이어야 합니다. rise를 연속 세 번 선택하지 말고, 큰 보상 뒤에는 hold 또는 fall을 우선하세요. tensionDirection은 실제 storyState.tension 변화와 일치해야 하며 ±2 이하는 hold입니다.
 8. 같은 phase와 outcome이 반복되면 다음에는 기능을 바꾸세요. 그렇다고 두 번마다 사건이나 실패를 강제하지 말고, 질문을 닫거나 관점을 바꾸거나 조건부 성공을 사용할 수 있습니다.
-9. qualified_success와 setback에는 인물이 원하는 것을 그대로 얻지 못하게 하는 구체적인 조건·책임·대가를 conditionOrCost에 작성하세요. release+success에는 왜 안도해도 되는지 reliefReason을 작성하세요.
-10. 호의와 제안을 연속해서 무조건 수락시키지 마세요. 수락 자체가 자연스럽다면 미해결 질문을 하나 닫고, 다음 책임은 미래 상태로 남기되 즉석 위기를 덧붙이지 마세요.
+9. qualified_success와 setback에는 세계에서 실제로 확정된 조건·책임·대가를 consequence에 작성하세요. release+success에는 이미 안도해도 되는 근거를 reliefReason에 작성하세요.
+10. 호의나 제안을 수락할지는 상대 캐릭터의 권한입니다. Director가 수락·거절·감정·대사를 지정하지 마세요.
 11. storyPatch에는 실제 변경분만 반환하세요. arcPhase/tension/pacing을 유지하면 null, 삭제할 갈등·질문은 ID 목록, 추가·수정은 upsert 목록에 쓰세요. recentBeat에는 이번 판단을 한 문장으로 요약하세요. 전체 storyState를 반복하지 않습니다.
-12. sceneState는 이번 계획의 장면 목표·대가·딜레마를 완전한 최신 상태로 반환하세요.
-13. eventPlan과 nextScene은 사용하지 않는 action에서도 빈 문자열과 빈 배열로 모든 필드를 채우세요.
-14. 지정된 JSON schema만 출력하세요.`;
+12. sceneState는 캐릭터에게 공개 가능한 현재 장면의 목표·대가·열린 딜레마를 완전한 최신 상태로 반환하세요. 특정 캐릭터가 취해야 할 행동을 목표로 쓰지 마세요.
+13. responders의 perceptionReason에는 그 캐릭터가 왜 이 상황을 인지했고 지금 반응할 기회가 있는지만 쓰세요. 무엇을 말하거나 선택해야 하는지는 쓰지 마세요.
+14. eventPlan과 nextScene은 사용하지 않는 action에서도 빈 문자열과 빈 배열로 모든 필드를 채우세요.
+15. 지정된 JSON schema만 출력하세요.`;
 }
 
 export function buildResponderSelectionPrompt({ state, participants, minimum }) {

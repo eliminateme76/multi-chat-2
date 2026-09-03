@@ -1,0 +1,2 @@
+ALTER TABLE characters ADD COLUMN IF NOT EXISTS thread_contract_version INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS director_thread_contract_version INTEGER NOT NULL DEFAULT 0;

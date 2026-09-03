@@ -60,9 +60,9 @@ Browser (index.html + app.js)
 ### Critical behavior
 
 - `POST /api/turns` enqueues one durable progression operation and generates at most one character response.
-- `progression-runner.js` reuses a valid two-response Director plan or asks the Director for a new plan; `story-engine.js` then loads the selected character's active scene and private memories.
+- `progression-runner.js` reuses a valid two-response opportunity queue or asks the World Director to resolve external events/causality and select characters able to perceive and react; `story-engine.js` then loads the selected character's active scene and private memories.
 - `context-builder.js` builds a bounded prompt from the active character card, related relationships, private memories, scene summary, and only recent **public** logs.
-- The model returns structured dialogue/action/emotion plus optional memory, relationship changes, and a scene progress signal.
+- The character model independently returns dialogue/emotion and either a self-controlled action or an unresolved world attempt, plus optional memory, directed relationship changes, and an advisory scene signal. It never declares external success or another character's reaction.
 - Model and reasoning effort are resolved from character override → role default → server fallback and are sent on every `turn/start`; do not make thread history authoritative for runtime configuration.
 - Only after validation does one PostgreSQL transaction persist the public entry and allowed state changes.
 - Do not expose Codex auth details or app-server directly to the browser.

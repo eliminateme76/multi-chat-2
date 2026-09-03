@@ -1,5 +1,5 @@
 const stages = [
-  ['state_load', 'DB STATE', '상태 조회'], ['director_plan', 'DIRECTOR', '전개 판단'], ['speaker_select', 'ROUTER', '화자 선택'], ['memory_retrieve', 'MEMORY', '기억 검색'],
+  ['state_load', 'DB STATE', '상태 조회'], ['director_plan', 'DIRECTOR', '세계 판정'], ['speaker_select', 'ROUTER', '화자 선택'], ['memory_retrieve', 'MEMORY', '기억 검색'],
   ['context_build', 'CONTEXT', '프롬프트 조립'], ['queue_wait', 'QUEUE', '요청 대기'], ['app_server_ready', 'APP SERVER', '프로세스 준비'],
   ['thread_start', 'THREAD', 'Thread 생성'], ['model_generate', 'MODEL', '응답 생성'], ['output_validate', 'VALIDATOR', '출력 검증'], ['db_transaction', 'DATABASE', '상태 저장']
 ];
@@ -24,7 +24,9 @@ function render() {
   $('#connection-state').className = 'status-completed';
   $('#run-status').textContent = run ? statusText(run.status) : '대기 중';
   $('#run-status').className = run ? `status-${run.status}` : '';
-  $('#run-detail').textContent = run ? `${runLabel(run.type)}${run.metadata?.activeCharacterName || run.metadata?.characterName ? ` · 캐릭터 ${run.metadata.activeCharacterName || run.metadata.characterName}` : ''}${run.metadata?.directorAction ? ` · ${run.metadata.directorAction}` : ''}${run.metadata?.beatPhase ? ` · ${run.metadata.beatPhase}/${run.metadata.beatOutcome}` : ''}${run.metadata?.tensionAfter != null ? ` · 긴장 ${run.metadata.tensionBefore ?? '?'}→${run.metadata.tensionAfter} ${run.metadata.tensionDirection || ''}` : ''}` : '새 요청을 기다리고 있습니다';
+  const worldPhase = run?.metadata?.worldPhase || run?.metadata?.beatPhase;
+  const worldOutcome = run?.metadata?.worldOutcome || run?.metadata?.beatOutcome;
+  $('#run-detail').textContent = run ? `${runLabel(run.type)}${run.metadata?.activeCharacterName || run.metadata?.characterName ? ` · 캐릭터 ${run.metadata.activeCharacterName || run.metadata.characterName}` : ''}${run.metadata?.directorAction ? ` · ${run.metadata.directorAction}` : ''}${worldPhase ? ` · 세계 ${worldPhase}/${worldOutcome}` : ''}${run.metadata?.tensionAfter != null ? ` · 긴장 ${run.metadata.tensionBefore ?? '?'}→${run.metadata.tensionAfter} ${run.metadata.tensionDirection || ''}` : ''}` : '새 요청을 기다리고 있습니다';
   $('#total-duration').textContent = run ? ms(run.durationMs ?? Date.now() - Date.parse(run.startedAt)) : '—';
   const completedStages = run?.stages.filter((stage) => stage.durationMs != null) || [];
   const bottleneck = completedStages.toSorted((a, b) => b.durationMs - a.durationMs)[0];
@@ -46,11 +48,13 @@ function renderDirectorPlan() {
   const title = $('#director-plan-title');
   const status = $('#director-plan-status');
   const rationale = $('#director-plan-rationale');
+  const world = $('#director-plan-world');
   const responders = $('#director-plan-responders');
   const meta = $('#director-plan-meta');
   if (!directorPlan) {
-    title.textContent = '최근 계획 없음'; status.textContent = '대기'; status.className = '';
-    rationale.textContent = 'Director가 새 계획을 만들면 판단 이유와 응답 순서가 여기에 표시됩니다.';
+    title.textContent = '최근 세계 판단 없음'; status.textContent = '대기'; status.className = '';
+    rationale.textContent = 'Director가 세계의 사건과 결과를 판단하면 근거와 다음 반응 기회가 여기에 표시됩니다.';
+    world.textContent = '';
     responders.innerHTML = ''; meta.textContent = '—'; return;
   }
   const actionLabel = ({ CONTINUE: '현재 장면 계속', INJECT_MINOR_EVENT: '소규모 사건 투입', TRANSITION_SCENE: '장면 전환', PROPOSE_MAJOR: '중대 전개 제안' })[directorPlan.action] || directorPlan.action || '계획';
@@ -61,6 +65,7 @@ function renderDirectorPlan() {
   else if (directorPlan.valid) { status.textContent = directorPlan.responsesConsumed ? '재사용 가능' : '응답 대기'; status.className = directorPlan.responsesConsumed ? 'reused' : 'active'; }
   else { status.textContent = '계획 완료'; status.className = 'completed'; }
   rationale.textContent = directorPlan.rationale;
+  world.textContent = directorPlan.worldPressure ? `확정된 세계 조건 · ${directorPlan.worldPressure}` : directorPlan.worldRelief ? `확정된 안도 근거 · ${directorPlan.worldRelief}` : '추가로 확정된 외부 조건 없음';
   const remaining = new Set(directorPlan.remainingResponderIds || []);
   responders.innerHTML = directorPlan.responders.map((responder, index) => {
     const done = index < Number(directorPlan.responsesConsumed || 0);
@@ -69,7 +74,7 @@ function renderDirectorPlan() {
     const state = done ? '완료' : next ? '다음' : cancelled ? '취소' : '대기';
     return `<div class="plan-responder ${done ? 'done' : next ? 'next' : cancelled ? 'cancelled' : ''}"><strong>${esc(responder.name)}</strong><small>${state}</small></div>`;
   }).join('');
-  meta.textContent = `Scene ${directorPlan.sceneNumber} · seq ${directorPlan.planStartedSequence} · ${directorPlan.beatPhase || '—'}/${directorPlan.beatOutcome || '—'}${directorPlan.latestOperation?.reused ? ' · 최근 작업에서 계획 재사용' : ''}`;
+  meta.textContent = `Scene ${directorPlan.sceneNumber} · seq ${directorPlan.planStartedSequence} · 세계 ${directorPlan.worldPhase || '—'}/${directorPlan.worldOutcome || '—'}${directorPlan.latestOperation?.reused ? ' · 최근 판단의 반응 순서 재사용' : ''}`;
 }
 
 function allTrackedThreads() {

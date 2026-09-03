@@ -137,7 +137,7 @@ async function advanceTurn() {
       const actualTypingCharacter = runningStep ? participants.find((character) => character.id === runningStep.characterId) || characterById(runningStep.characterId) || { id: runningStep.characterId, name: runningStep.characterName } : null;
       if (typingCharacter?.id !== actualTypingCharacter?.id) { typingCharacter = actualTypingCharacter; render(); }
       if (runningStep) $('#save-status').textContent = `${runningStep.characterName} · 응답 생성 중…`;
-      else if (!operation.steps?.length) $('#save-status').textContent = '월드 디렉터 · 진행 계획 중…';
+      else if (!operation.steps?.length) $('#save-status').textContent = '월드 디렉터 · 세계 상황 판단 중…';
       const completedNow = operation.steps?.filter((step) => step.status === 'COMPLETED').length || 0;
       if (completedNow > completedStepCount && operation.status !== 'COMPLETED') {
         completedStepCount = completedNow;

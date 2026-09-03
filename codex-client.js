@@ -3,7 +3,7 @@ import { mkdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { buildCharacterSuggestionPrompt, buildCharacterTurnPrompt, buildDirectorProgressionPrompt, buildEventSuggestionsPrompt, buildDirectorEventApplyPrompt, buildDirectorSceneTransitionPrompt, buildStoryRepairPrompt, buildWorldDraftPrompt } from './context-builder.js';
-import { BEAT_OUTCOMES, DIRECTOR_ACTIONS, RHYTHM_PHASES, TENSION_DIRECTIONS, advanceRhythmState, applyCharacterStatePatch, applyStoryStatePatch, cleanCharacterState, cleanDramaticState, cleanRhythmState, cleanStoryState, tensionDirection } from './story-dynamics.js';
+import { BEAT_OUTCOMES, DIRECTOR_ACTIONS, RHYTHM_PHASES, TENSION_DIRECTIONS, advanceRhythmState, applyCharacterStatePatch, applyStoryStatePatch, cleanCharacterState, cleanDramaticState, cleanRhythmState, cleanStoryState, findPendingWorldAttempt, tensionDirection } from './story-dynamics.js';
 import { endStage, failStage, recordStage, setRuntimeResource, startStage, updateRunMetadata } from './runtime-telemetry.js';
 
 const CODEX_MODEL = process.env.CODEX_MODEL || 'gpt-5.6-sol';
@@ -14,12 +14,13 @@ const CHARACTER_THREAD_TURN_LIMIT = Number(process.env.CHARACTER_THREAD_TURN_LIM
 const CHARACTER_THREAD_TOKEN_LIMIT = Number(process.env.CHARACTER_THREAD_TOKEN_LIMIT || 50000);
 const DIRECTOR_THREAD_TURN_LIMIT = Number(process.env.DIRECTOR_THREAD_TURN_LIMIT || 8);
 const DIRECTOR_THREAD_TOKEN_LIMIT = Number(process.env.DIRECTOR_THREAD_TOKEN_LIMIT || 80000);
+const AGENT_AUTHORITY_CONTRACT_VERSION = 1;
 mkdirSync(AGENT_CWD, { recursive: true, mode: 0o700 });
 
 const shouldRollover = (owner, activeThreadId, turnCount, contextTokens, required) => Boolean(activeThreadId) && (required || Number(turnCount || 0) >= (owner === 'director' ? DIRECTOR_THREAD_TURN_LIMIT : CHARACTER_THREAD_TURN_LIMIT) || Number(contextTokens || 0) >= (owner === 'director' ? DIRECTOR_THREAD_TOKEN_LIMIT : CHARACTER_THREAD_TOKEN_LIMIT));
 
 function directorThreadOptions(director) {
-  const rollover = shouldRollover('director', director.activeThreadId, director.activeThreadTurnCount, director.activeThreadContextTokens, director.threadRolloverRequired);
+  const rollover = shouldRollover('director', director.activeThreadId, director.activeThreadTurnCount, director.activeThreadContextTokens, director.threadRolloverRequired || Number(director.threadContractVersion || 0) < AGENT_AUTHORITY_CONTRACT_VERSION);
   return { threadId: rollover ? null : director.activeThreadId, previousThreadId: rollover ? director.activeThreadId : null, rollover, model: director.model || CODEX_MODEL, effort: director.reasoningEffort || 'high', persistent: true };
 }
 
@@ -27,7 +28,7 @@ const turnSchema = {
   type: 'object',
   properties: {
     shouldRespond: { type: 'boolean' }, silenceReason: { type: 'string' },
-    dialogue: { type: 'string' }, action: { type: 'string' }, emotion: { type: 'string' },
+    dialogue: { type: 'string' }, action: { type: 'string' }, actionScope: { type: 'string', enum: ['NONE','SELF','WORLD_ATTEMPT'] }, emotion: { type: 'string' },
     statePatch: {
       type: 'object', properties: {
         setCurrentGoal: { type: ['string','null'] }, setInternalConflict: { type: ['string','null'] },
@@ -45,11 +46,9 @@ const turnSchema = {
         required: ['targetId', 'delta', 'label', 'reason'], additionalProperties: false
       }
     },
-    beatOutcome: { type: 'string', enum: ['open','success','qualified_success','setback'] },
-    conditionOrCost: { type: 'string' },
     sceneSignal: { type: 'string', enum: ['continue', 'stalled', 'complete'] }
   },
-  required: ['shouldRespond', 'silenceReason', 'dialogue', 'action', 'emotion', 'statePatch', 'memory', 'memoryImportance', 'relationshipChanges', 'beatOutcome', 'conditionOrCost', 'sceneSignal'],
+  required: ['shouldRespond', 'silenceReason', 'dialogue', 'action', 'actionScope', 'emotion', 'statePatch', 'memory', 'memoryImportance', 'relationshipChanges', 'sceneSignal'],
   additionalProperties: false
 };
 
@@ -77,13 +76,13 @@ const dramaticStateSchema = {
 };
 
 const eventPlanProperties = { text: { type: 'string' }, eventType: { type: 'string', enum: ['일상','관계','연락','선택','발견','돌발','시간 전환','분위기','일반'] }, time: { type: 'string' }, location: { type: 'string' }, mood: { type: 'string' }, description: { type: 'string' } };
-const beatPlanSchema = {
+const worldResolutionSchema = {
   type: 'object', properties: {
     phase: { type: 'string', enum: ['build','pressure','choice','consequence','release'] },
     outcome: { type: 'string', enum: ['open','success','qualified_success','setback'] },
     tensionDirection: { type: 'string', enum: ['rise','hold','fall'] },
-    conditionOrCost: { type: 'string' }, reliefReason: { type: 'string' }
-  }, required: ['phase','outcome','tensionDirection','conditionOrCost','reliefReason'], additionalProperties: false
+    consequence: { type: 'string' }, reliefReason: { type: 'string' }
+  }, required: ['phase','outcome','tensionDirection','consequence','reliefReason'], additionalProperties: false
 };
 const storyPatchSchema = {
   type: 'object', properties: {
@@ -100,12 +99,12 @@ const storyPatchSchema = {
 const directorProgressionSchema = {
   type: 'object', properties: {
     action: { type: 'string', enum: ['CONTINUE','INJECT_MINOR_EVENT','TRANSITION_SCENE','PROPOSE_MAJOR'] }, rationale: { type: 'string' },
-    responders: { type: 'array', minItems: 1, maxItems: 2, items: { type: 'object', properties: { characterId: { type: 'string' }, reason: { type: 'string' } }, required: ['characterId','reason'], additionalProperties: false } },
-    storyPatch: storyPatchSchema, sceneState: dramaticStateSchema, beatPlan: beatPlanSchema,
+    responders: { type: 'array', minItems: 1, maxItems: 2, items: { type: 'object', properties: { characterId: { type: 'string' }, perceptionReason: { type: 'string' } }, required: ['characterId','perceptionReason'], additionalProperties: false } },
+    storyPatch: storyPatchSchema, sceneState: dramaticStateSchema, worldResolution: worldResolutionSchema,
     eventPlan: { type: 'object', properties: eventPlanProperties, required: Object.keys(eventPlanProperties), additionalProperties: false },
     nextScene: { type: 'object', properties: { ...eventPlanProperties, participantIds: { type: 'array', maxItems: 6, items: { type: 'string' } } }, required: [...Object.keys(eventPlanProperties),'participantIds'], additionalProperties: false },
     majorProposals: { type: 'array', maxItems: 3, items: { type: 'object', properties: { category: { type: 'string', enum: ['관계','선택','발견','돌발','시간 전환','분위기'] }, text: { type: 'string' }, consequence: { type: 'string' }, time: { type: 'string' } }, required: ['category','text','consequence','time'], additionalProperties: false } }
-  }, required: ['action','rationale','responders','storyPatch','sceneState','beatPlan','eventPlan','nextScene','majorProposals'], additionalProperties: false
+  }, required: ['action','rationale','responders','storyPatch','sceneState','worldResolution','eventPlan','nextScene','majorProposals'], additionalProperties: false
 };
 
 const storyRepairSchema = {
@@ -411,7 +410,7 @@ export function generateCodexTurn(context) {
   const contextStage = startStage(context.runId, 'context_build');
   const prompt = buildCharacterTurnPrompt(context);
   endStage(context.runId, contextStage, { promptChars: prompt.length, publicLogs: Math.min(6, context.state.logs.length), privateMemories: context.memories.length });
-  const rollover = shouldRollover('character', context.character.activeThreadId, context.character.activeThreadTurnCount, context.character.activeThreadContextTokens, context.character.threadRolloverRequired);
+  const rollover = shouldRollover('character', context.character.activeThreadId, context.character.activeThreadTurnCount, context.character.activeThreadContextTokens, context.character.threadRolloverRequired || Number(context.character.threadContractVersion || 0) < AGENT_AUTHORITY_CONTRACT_VERSION);
   return runCodexStructured({
     prompt, outputSchema: turnSchema, label: `캐릭터 응답 · ${context.character.name}`, runId: context.runId,
     thread: { threadId: rollover ? null : context.character.activeThreadId, previousThreadId: rollover ? context.character.activeThreadId : null, rollover, model: context.character.effectiveModel || CODEX_MODEL, effort: context.character.effectiveReasoningEffort || 'medium', persistent: true },
@@ -422,6 +421,9 @@ export function generateCodexTurn(context) {
       if (typeof result.action !== 'string' || (result.shouldRespond && context.state.presentationMode !== 'chat' && !result.action.trim() && !result.dialogue.trim())) throw new Error('missing response content');
       for (const field of ['dialogue', 'action', 'emotion']) result[field] = result[field].trim();
       result.silenceReason = result.silenceReason.trim();
+      if (!['NONE','SELF','WORLD_ATTEMPT'].includes(result.actionScope)) throw new Error('invalid action scope');
+      if (result.action && result.actionScope === 'NONE') throw new Error('action content requires an action scope');
+      if (!result.action && result.actionScope !== 'NONE') throw new Error('action scope requires action content');
       if (!result.shouldRespond && context.state.presentationMode !== 'chat') throw new Error('story characters must respond');
       if (!result.shouldRespond && !result.silenceReason) throw new Error('missing silenceReason');
       if (!result.shouldRespond && (result.dialogue || result.action)) throw new Error('silent response contains public content');
@@ -429,11 +431,6 @@ export function generateCodexTurn(context) {
       result.memory = result.memory.trim();
       if (!Number.isInteger(result.memoryImportance) || result.memoryImportance < 0 || result.memoryImportance > 100) throw new Error('invalid memoryImportance');
       if (!Array.isArray(result.relationshipChanges)) throw new Error('invalid relationshipChanges');
-      if (!BEAT_OUTCOMES.has(result.beatOutcome) || typeof result.conditionOrCost !== 'string') throw new Error('invalid beat outcome');
-      result.conditionOrCost = result.conditionOrCost.trim().slice(0, 240);
-      const expectedOutcome = context.state.dramaticState?.outcomeConstraint || 'open';
-      if (result.shouldRespond && result.beatOutcome !== expectedOutcome) throw new Error(`beat outcome must be ${expectedOutcome}`);
-      if (result.shouldRespond && ['qualified_success','setback'].includes(result.beatOutcome) && !result.conditionOrCost) throw new Error('qualified success or setback requires a concrete condition or cost');
       const patch = result.statePatch;
       if (!patch || typeof patch !== 'object' || !['setCurrentGoal','setInternalConflict'].every((key) => patch[key] === null || typeof patch[key] === 'string')) throw new Error('invalid character state patch');
       for (const key of ['addBeliefs','removeBeliefs','addCommitments','removeCommitments','appendDevelopmentNotes']) if (!Array.isArray(patch[key]) || patch[key].some((item) => typeof item !== 'string')) throw new Error(`invalid character state patch ${key}`);
@@ -443,35 +440,37 @@ export function generateCodexTurn(context) {
         change.label = change.label.trim().slice(0, 120); change.reason = change.reason.trim().slice(0, 240);
       }
       if (!['continue', 'stalled', 'complete'].includes(result.sceneSignal)) throw new Error('invalid sceneSignal');
-      if (!result.shouldRespond && (result.memory || result.memoryImportance !== 0 || result.relationshipChanges.length || result.beatOutcome !== 'open' || result.conditionOrCost || result.sceneSignal !== 'continue' || JSON.stringify(result.nextState) !== JSON.stringify(cleanCharacterState(context.character.currentState, context.character.goal)))) throw new Error('silent response contains state changes');
+      if (!result.shouldRespond && (result.actionScope !== 'NONE' || result.memory || result.memoryImportance !== 0 || result.relationshipChanges.length || result.sceneSignal !== 'continue' || JSON.stringify(result.nextState) !== JSON.stringify(cleanCharacterState(context.character.currentState, context.character.goal)))) throw new Error('silent response contains state changes');
     }
   });
 }
 
 export function generateDirectorProgressionPlan(state, participants, runId, director) {
-  updateRunMetadata(runId, { activeAgentType: 'director', activeAgentName: '월드 디렉터', activePhase: '진행 계획', activeThreadId: director.activeThreadId || null, activeModel: director.model || CODEX_MODEL, activeEffort: director.reasoningEffort || 'high' });
+  updateRunMetadata(runId, { activeAgentType: 'director', activeAgentName: '월드 디렉터', activePhase: '세계 상황·결과 판정', activeThreadId: director.activeThreadId || null, activeModel: director.model || CODEX_MODEL, activeEffort: director.reasoningEffort || 'high' });
   const prompt = buildDirectorProgressionPrompt(state, participants);
-  return runCodexStructured({ prompt, outputSchema: directorProgressionSchema, label: 'World Director · 진행 계획', runId,
+  return runCodexStructured({ prompt, outputSchema: directorProgressionSchema, label: 'World Director · 세계 판정', runId,
     thread: directorThreadOptions(director),
     validate: (result) => {
       if (!DIRECTOR_ACTIONS.has(result.action) || typeof result.rationale !== 'string') throw new Error('invalid Director action');
       const characterIds = state.characters.map((item) => item.id);
       if (!result.storyPatch || typeof result.storyPatch !== 'object') throw new Error('invalid story state patch');
       result.storyState = applyStoryStatePatch(state.storyState, result.storyPatch, characterIds, state.latestSceneSequence);
-      const beatPlan = result.beatPlan;
-      if (!RHYTHM_PHASES.has(beatPlan?.phase) || !BEAT_OUTCOMES.has(beatPlan?.outcome) || !TENSION_DIRECTIONS.has(beatPlan?.tensionDirection)) throw new Error('invalid beat plan');
-      beatPlan.conditionOrCost = String(beatPlan.conditionOrCost || '').trim().slice(0, 240);
-      beatPlan.reliefReason = String(beatPlan.reliefReason || '').trim().slice(0, 240);
-      if (['qualified_success','setback'].includes(beatPlan.outcome) && !beatPlan.conditionOrCost) throw new Error('Director beat requires a condition or cost');
-      if (beatPlan.phase === 'release' && beatPlan.outcome === 'success' && !beatPlan.reliefReason) throw new Error('release beat requires a relief reason');
+      const worldResolution = result.worldResolution;
+      if (!RHYTHM_PHASES.has(worldResolution?.phase) || !BEAT_OUTCOMES.has(worldResolution?.outcome) || !TENSION_DIRECTIONS.has(worldResolution?.tensionDirection)) throw new Error('invalid world resolution');
+      worldResolution.consequence = String(worldResolution.consequence || '').trim().slice(0, 240);
+      worldResolution.reliefReason = String(worldResolution.reliefReason || '').trim().slice(0, 240);
+      if (['qualified_success','setback'].includes(worldResolution.outcome) && !worldResolution.consequence) throw new Error('world resolution requires a concrete consequence');
+      if (worldResolution.phase === 'release' && worldResolution.outcome === 'success' && !worldResolution.reliefReason) throw new Error('world release requires a relief reason');
       const actualDirection = tensionDirection(state.storyState.tension, result.storyState.tension);
-      if (actualDirection !== beatPlan.tensionDirection) throw new Error(`tension direction must match numeric change (${actualDirection})`);
+      if (actualDirection !== worldResolution.tensionDirection) throw new Error(`tension direction must match numeric change (${actualDirection})`);
       const previousRhythm = cleanRhythmState(state.storyState.rhythm, state.storyState.recentBeats);
       if (previousRhythm.consecutiveRises >= 2 && actualDirection === 'rise' && result.storyState.arcPhase !== 'climax') throw new Error('tension cannot rise three times outside climax');
-      if (previousRhythm.repeatedOutcomeCount >= 2 && previousRhythm.lastOutcome === beatPlan.outcome && previousRhythm.phase === beatPlan.phase) throw new Error('Director repeated the same narrative function and outcome');
-      result.storyState.rhythm = advanceRhythmState(state.storyState, beatPlan, result.storyState.tension);
-      result.sceneState = cleanDramaticState({ ...result.sceneState, beatIntent: beatPlan.phase, outcomeConstraint: beatPlan.outcome, pressureSource: beatPlan.conditionOrCost, reliefReason: beatPlan.reliefReason }, characterIds, state.dramaticState);
+      if (previousRhythm.repeatedOutcomeCount >= 2 && previousRhythm.lastOutcome === worldResolution.outcome && previousRhythm.phase === worldResolution.phase) throw new Error('Director repeated the same world function and outcome');
+      result.storyState.rhythm = advanceRhythmState(state.storyState, worldResolution, result.storyState.tension);
+      result.sceneState = cleanDramaticState({ ...result.sceneState, worldPhase: worldResolution.phase, lastWorldOutcome: worldResolution.outcome, worldPressure: worldResolution.consequence, worldRelief: worldResolution.reliefReason }, characterIds, state.dramaticState);
       if (!Array.isArray(result.responders) || result.responders.length < 1 || result.responders.length > 2) throw new Error('invalid responders');
+      if (result.responders.some((responder) => typeof responder.perceptionReason !== 'string' || !responder.perceptionReason.trim())) throw new Error('responders require perception reasons');
+      if (findPendingWorldAttempt(state.logs) && result.action === 'CONTINUE') throw new Error('pending world attempt must be resolved before another character response');
       if (result.action === 'INJECT_MINOR_EVENT' && (!result.eventPlan?.text?.trim() || !result.eventPlan?.eventType?.trim())) throw new Error('minor event plan is required');
       if (result.action === 'TRANSITION_SCENE' && (!result.nextScene?.description?.trim() || !result.nextScene?.participantIds?.length)) throw new Error('next scene plan is required');
       if (result.action === 'PROPOSE_MAJOR' && (!Array.isArray(result.majorProposals) || result.majorProposals.length < 2 || result.majorProposals.length > 3)) throw new Error('major proposals require 2-3 options');

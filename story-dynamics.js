@@ -17,7 +17,7 @@ export function emptyStoryState() {
 }
 
 export function emptyDramaticState() {
-  return { objective: '', stakes: '', dilemma: '', beatType: 'reflection', targetTension: 35, participantIds: [], beatIntent: 'build', outcomeConstraint: 'open', pressureSource: '', reliefReason: '', plannedResponderIds: [], planResponderIds: [], planStartedSequence: 0, responsesConsumed: 0, planAction: '', planRationale: '', planOperationId: '' };
+  return { objective: '', stakes: '', dilemma: '', beatType: 'reflection', targetTension: 35, participantIds: [], worldPhase: 'build', lastWorldOutcome: 'open', worldPressure: '', worldRelief: '', plannedResponderIds: [], planResponderIds: [], planStartedSequence: 0, responsesConsumed: 0, planAction: '', planRationale: '', planOperationId: '' };
 }
 
 export function emptyRhythmState() {
@@ -165,10 +165,10 @@ export function cleanDramaticState(value = {}, characterIds = [], fallback = {})
     beatType: BEAT_TYPES.has(source.beatType) ? source.beatType : (BEAT_TYPES.has(base.beatType) ? base.beatType : 'reflection'),
     targetTension: integer(source.targetTension, 0, 100, integer(base.targetTension, 0, 100, 35)),
     participantIds,
-    beatIntent: RHYTHM_PHASES.has(source.beatIntent) ? source.beatIntent : (RHYTHM_PHASES.has(base.beatIntent) ? base.beatIntent : 'build'),
-    outcomeConstraint: BEAT_OUTCOMES.has(source.outcomeConstraint) ? source.outcomeConstraint : (BEAT_OUTCOMES.has(base.outcomeConstraint) ? base.outcomeConstraint : 'open'),
-    pressureSource: clean(source.pressureSource, 240, clean(base.pressureSource, 240)),
-    reliefReason: clean(source.reliefReason, 240, clean(base.reliefReason, 240)),
+    worldPhase: RHYTHM_PHASES.has(source.worldPhase) ? source.worldPhase : (RHYTHM_PHASES.has(source.beatIntent) ? source.beatIntent : (RHYTHM_PHASES.has(base.worldPhase) ? base.worldPhase : (RHYTHM_PHASES.has(base.beatIntent) ? base.beatIntent : 'build'))),
+    lastWorldOutcome: BEAT_OUTCOMES.has(source.lastWorldOutcome) ? source.lastWorldOutcome : (BEAT_OUTCOMES.has(source.outcomeConstraint) ? source.outcomeConstraint : (BEAT_OUTCOMES.has(base.lastWorldOutcome) ? base.lastWorldOutcome : (BEAT_OUTCOMES.has(base.outcomeConstraint) ? base.outcomeConstraint : 'open'))),
+    worldPressure: clean(source.worldPressure, 240, clean(source.pressureSource, 240, clean(base.worldPressure, 240, clean(base.pressureSource, 240)))),
+    worldRelief: clean(source.worldRelief, 240, clean(source.reliefReason, 240, clean(base.worldRelief, 240, clean(base.reliefReason, 240)))),
     plannedResponderIds,
     planResponderIds,
     planStartedSequence: Math.max(0, Number(source.planStartedSequence ?? base.planStartedSequence) || 0),
@@ -177,6 +177,15 @@ export function cleanDramaticState(value = {}, characterIds = [], fallback = {})
     planRationale: clean(source.planRationale, 500, clean(base.planRationale, 500)),
     planOperationId: clean(source.planOperationId, 64, clean(base.planOperationId, 64))
   };
+}
+
+export function findPendingWorldAttempt(logs = []) {
+  let pending = null;
+  for (const entry of Array.isArray(logs) ? logs : []) {
+    if (entry?.type === 'event' && entry.actorType === 'DIRECTOR') pending = null;
+    if (entry?.type === 'message' && entry.payload?.actionScope === 'WORLD_ATTEMPT') pending = entry;
+  }
+  return pending;
 }
 
 export function publicStoryStatus(storyState, dramaticState, intensity) {
