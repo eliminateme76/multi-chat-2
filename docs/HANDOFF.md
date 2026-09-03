@@ -11,8 +11,13 @@ Last updated: 2026-09-03 (Asia/Seoul)
 
 ## Implemented in this change
 
+- Added `CHARACTER_ATTEMPT` plus an explicit active-character target. Interpersonal offers, requests, touch and conflict now route directly to the target character, who owns acceptance/refusal, without inserting a World Director event.
+- Character prompts include the active participants' routing IDs and public names so structured interaction targets validate without exposing their private state.
+- Kept `WORLD_ATTEMPT` only for environment, chance and world-rule outcomes. Interaction routing replaces the previous responder audit with `CHARACTER_INTERACTION`, remains visible in the monitor, and can chain reciprocal character choices without Director latency.
+- Advanced the authority contract to version `2`, causing version-1 character and Director threads to roll over once on their next use.
+- Added one corrective Director retry when a pending `WORLD_ATTEMPT` is incorrectly answered with `CONTINUE`; Director-stage failures with no character step can now be retried through the existing operation retry endpoint.
 - Reframed the persistent Director as the World's causal resolver rather than a character script writer. Director responder reasons now describe only perception/opportunity, and its structured result evaluates already-established history or a world event instead of prescribing the next character's result.
-- Removed Director-selected success/failure from character prompts and structured output. Characters independently choose acceptance/refusal, speech and action, and classify actions as `NONE`, self-controlled `SELF`, or unresolved `WORLD_ATTEMPT`.
+- Removed Director-selected success/failure from character prompts and structured output. Characters independently choose acceptance/refusal, speech and action, and classify authority as `NONE`, self-controlled `SELF`, targeted `CHARACTER_ATTEMPT`, or unresolved `WORLD_ATTEMPT`.
 - A `WORLD_ATTEMPT` is persisted without declaring external success, clears any second-responder queue, and forces the World Director to resolve the attempt before another character response. Legacy dramatic-state beat fields remain read-compatible and normalize to world phase/outcome/pressure fields.
 - Added agent authority contract versions so existing character and Director threads roll over once instead of retaining conflicting old instructions.
 - Updated the monitor to label the Director as a world judgment and show the latest established external condition rather than implying that it scripts the character's next result.
@@ -39,7 +44,7 @@ Last updated: 2026-09-03 (Asia/Seoul)
 ## Database migration
 
 - Latest migration: `db/014_agent_authority_contract.sql`
-- Adds character/Director thread contract versions. Existing active threads with version `0` roll over on their next call; successful new-contract calls persist version `1`.
+- Adds character/Director thread contract versions. Any active thread below the current contract version `2` rolls over on its next call; successful calls persist version `2`.
 - No JSON rewrite is needed; dramatic state normalizes on read and new character Event payloads carry `actionScope`.
 - `npm run migrate` is safe to rerun.
 
@@ -49,6 +54,9 @@ Last updated: 2026-09-03 (Asia/Seoul)
 - `npm run migrate` passed.
 - `npm run verify:api` passed against a disposable world using the real Codex app-server. It created a structured world, generated `worldResolution` and independent character `actionScope` output, and preserved model/thread settings.
 - The API verification also confirmed authority contract version persistence, one response per operation, token/counter metadata, and a second response that reused the queued reaction opportunity without a Director call. The latest run took 36.6s for Director+character and 10.0s for the reused character-only operation.
+- After the `CHARACTER_ATTEMPT` change, the final real app-server API run passed in 31.6s for Director+character and 10.5s for the reused character-only operation; the assertion now accepts either a completed queue or a newly chained character-interaction queue.
+- The production story `느리게 도착한 마음` was advanced from turn 43 to 46. A legacy `WORLD_ATTEMPT` was resolved once, then 서윤's question was stored as `CHARACTER_ATTEMPT(target=김재현)` and the next 25.1s operation called 재현 directly with `runtime.director=null`. The resulting dialogue remained coherent, and the monitor's interaction card was visually checked at 1920×1080.
+- This playthrough exposed and verified fixes for two recovery cases: a Director incorrectly returning `CONTINUE` for a pending world attempt, and a character lacking public target IDs. The failed durable operations were retried without duplicating stored events.
 - `npm run verify:latency-logic` passed for compact state patch merging, responder-queue cleaning, and visibility-safe recent context fallback.
 - The real app-server API check also verified that the sanitized Director-plan endpoint reports the generated rationale/order and changes to reused/completed after the second operation. The monitor card was visually checked at 1920×1080 in both empty and populated states.
 - A disposable clone using the production `gpt-5.6-sol` settings completed a fresh Director+character operation in 41.3s and a queued-plan character-only operation in 17.2s. The prior recent progression average was about 73s; this sample improved the full-plan request by 43% and the reused-plan request by 76% (model latency remains variable).

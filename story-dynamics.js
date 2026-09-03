@@ -188,6 +188,15 @@ export function findPendingWorldAttempt(logs = []) {
   return pending;
 }
 
+export function routeCharacterInteraction(dramaticState, characterIds, { sourceName, targetId, targetName, sequence }) {
+  const current = cleanDramaticState(dramaticState, characterIds);
+  return cleanDramaticState({
+    ...current,
+    plannedResponderIds: [targetId], planResponderIds: [targetId], planStartedSequence: Math.max(0, Number(sequence) || 0), responsesConsumed: 0,
+    planAction: 'CHARACTER_INTERACTION', planRationale: `${sourceName}의 말이나 행동에 대한 결정권이 ${targetName || '대상 캐릭터'}에게 있습니다.`, planOperationId: ''
+  }, characterIds, current);
+}
+
 export function publicStoryStatus(storyState, dramaticState, intensity) {
   const story = cleanStoryState(storyState);
   const scene = cleanDramaticState(dramaticState);

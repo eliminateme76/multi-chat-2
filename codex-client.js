@@ -14,7 +14,7 @@ const CHARACTER_THREAD_TURN_LIMIT = Number(process.env.CHARACTER_THREAD_TURN_LIM
 const CHARACTER_THREAD_TOKEN_LIMIT = Number(process.env.CHARACTER_THREAD_TOKEN_LIMIT || 50000);
 const DIRECTOR_THREAD_TURN_LIMIT = Number(process.env.DIRECTOR_THREAD_TURN_LIMIT || 8);
 const DIRECTOR_THREAD_TOKEN_LIMIT = Number(process.env.DIRECTOR_THREAD_TOKEN_LIMIT || 80000);
-const AGENT_AUTHORITY_CONTRACT_VERSION = 1;
+const AGENT_AUTHORITY_CONTRACT_VERSION = 2;
 mkdirSync(AGENT_CWD, { recursive: true, mode: 0o700 });
 
 const shouldRollover = (owner, activeThreadId, turnCount, contextTokens, required) => Boolean(activeThreadId) && (required || Number(turnCount || 0) >= (owner === 'director' ? DIRECTOR_THREAD_TURN_LIMIT : CHARACTER_THREAD_TURN_LIMIT) || Number(contextTokens || 0) >= (owner === 'director' ? DIRECTOR_THREAD_TOKEN_LIMIT : CHARACTER_THREAD_TOKEN_LIMIT));
@@ -28,7 +28,7 @@ const turnSchema = {
   type: 'object',
   properties: {
     shouldRespond: { type: 'boolean' }, silenceReason: { type: 'string' },
-    dialogue: { type: 'string' }, action: { type: 'string' }, actionScope: { type: 'string', enum: ['NONE','SELF','WORLD_ATTEMPT'] }, emotion: { type: 'string' },
+    dialogue: { type: 'string' }, action: { type: 'string' }, actionScope: { type: 'string', enum: ['NONE','SELF','CHARACTER_ATTEMPT','WORLD_ATTEMPT'] }, actionTargetId: { type: 'string' }, emotion: { type: 'string' },
     statePatch: {
       type: 'object', properties: {
         setCurrentGoal: { type: ['string','null'] }, setInternalConflict: { type: ['string','null'] },
@@ -48,7 +48,7 @@ const turnSchema = {
     },
     sceneSignal: { type: 'string', enum: ['continue', 'stalled', 'complete'] }
   },
-  required: ['shouldRespond', 'silenceReason', 'dialogue', 'action', 'actionScope', 'emotion', 'statePatch', 'memory', 'memoryImportance', 'relationshipChanges', 'sceneSignal'],
+  required: ['shouldRespond', 'silenceReason', 'dialogue', 'action', 'actionScope', 'actionTargetId', 'emotion', 'statePatch', 'memory', 'memoryImportance', 'relationshipChanges', 'sceneSignal'],
   additionalProperties: false
 };
 
@@ -421,9 +421,15 @@ export function generateCodexTurn(context) {
       if (typeof result.action !== 'string' || (result.shouldRespond && context.state.presentationMode !== 'chat' && !result.action.trim() && !result.dialogue.trim())) throw new Error('missing response content');
       for (const field of ['dialogue', 'action', 'emotion']) result[field] = result[field].trim();
       result.silenceReason = result.silenceReason.trim();
-      if (!['NONE','SELF','WORLD_ATTEMPT'].includes(result.actionScope)) throw new Error('invalid action scope');
+      if (!['NONE','SELF','CHARACTER_ATTEMPT','WORLD_ATTEMPT'].includes(result.actionScope)) throw new Error('invalid action scope');
+      if (typeof result.actionTargetId !== 'string') throw new Error('invalid action target');
+      result.actionTargetId = result.actionTargetId.trim();
       if (result.action && result.actionScope === 'NONE') throw new Error('action content requires an action scope');
-      if (!result.action && result.actionScope !== 'NONE') throw new Error('action scope requires action content');
+      if (!result.action && ['SELF','WORLD_ATTEMPT'].includes(result.actionScope)) throw new Error('action scope requires action content');
+      const activeTargetIds = new Set((context.state.participants || []).map((participant) => participant.characterId).filter((id) => id !== context.character.id));
+      if (result.actionScope === 'CHARACTER_ATTEMPT' && (!result.actionTargetId || !activeTargetIds.has(result.actionTargetId) || (!result.action && !result.dialogue))) throw new Error('character attempt requires an active target and interaction');
+      if (result.actionScope === 'CHARACTER_ATTEMPT' && result.sceneSignal !== 'continue') throw new Error('character attempt must leave the scene open for its target');
+      if (result.actionScope !== 'CHARACTER_ATTEMPT' && result.actionTargetId) throw new Error('only character attempts may have an action target');
       if (!result.shouldRespond && context.state.presentationMode !== 'chat') throw new Error('story characters must respond');
       if (!result.shouldRespond && !result.silenceReason) throw new Error('missing silenceReason');
       if (!result.shouldRespond && (result.dialogue || result.action)) throw new Error('silent response contains public content');
@@ -440,14 +446,14 @@ export function generateCodexTurn(context) {
         change.label = change.label.trim().slice(0, 120); change.reason = change.reason.trim().slice(0, 240);
       }
       if (!['continue', 'stalled', 'complete'].includes(result.sceneSignal)) throw new Error('invalid sceneSignal');
-      if (!result.shouldRespond && (result.actionScope !== 'NONE' || result.memory || result.memoryImportance !== 0 || result.relationshipChanges.length || result.sceneSignal !== 'continue' || JSON.stringify(result.nextState) !== JSON.stringify(cleanCharacterState(context.character.currentState, context.character.goal)))) throw new Error('silent response contains state changes');
+      if (!result.shouldRespond && (result.actionScope !== 'NONE' || result.actionTargetId || result.memory || result.memoryImportance !== 0 || result.relationshipChanges.length || result.sceneSignal !== 'continue' || JSON.stringify(result.nextState) !== JSON.stringify(cleanCharacterState(context.character.currentState, context.character.goal)))) throw new Error('silent response contains state changes');
     }
   });
 }
 
-export function generateDirectorProgressionPlan(state, participants, runId, director) {
+export function generateDirectorProgressionPlan(state, participants, runId, director, correction = '') {
   updateRunMetadata(runId, { activeAgentType: 'director', activeAgentName: '월드 디렉터', activePhase: '세계 상황·결과 판정', activeThreadId: director.activeThreadId || null, activeModel: director.model || CODEX_MODEL, activeEffort: director.reasoningEffort || 'high' });
-  const prompt = buildDirectorProgressionPrompt(state, participants);
+  const prompt = buildDirectorProgressionPrompt(state, participants, correction);
   return runCodexStructured({ prompt, outputSchema: directorProgressionSchema, label: 'World Director · 세계 판정', runId,
     thread: directorThreadOptions(director),
     validate: (result) => {

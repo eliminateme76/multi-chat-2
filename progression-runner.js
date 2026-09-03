@@ -40,8 +40,9 @@ export async function retryProgression(pool, projectId, operationId) {
     if (!operation) throw new Error('Operation not found.');
     if (operation.type !== 'PROGRESSION') throw new Error('진행 작업만 재시도할 수 있습니다.');
     if (operation.status !== 'FAILED') throw new Error('실패한 진행 작업만 재시도할 수 있습니다.');
-    const failedSteps = Number((await client.query(`SELECT COUNT(*) AS count FROM world_operation_steps WHERE operation_id=$1 AND status='FAILED'`, [operationId])).rows[0].count);
-    if (!failedSteps) throw new Error('재시도할 캐릭터 단계가 없습니다.');
+    const stepCounts = (await client.query(`SELECT COUNT(*) AS total,COUNT(*) FILTER (WHERE status='FAILED') AS failed FROM world_operation_steps WHERE operation_id=$1`, [operationId])).rows[0];
+    const failedSteps = Number(stepCounts.failed);
+    if (Number(stepCounts.total) > 0 && !failedSteps) throw new Error('재시도할 실패 단계가 없습니다.');
     await client.query(`UPDATE world_operation_steps SET status='QUEUED',error=NULL,completed_at=NULL WHERE operation_id=$1 AND status='FAILED'`, [operationId]);
     await client.query(`UPDATE world_operations SET status='QUEUED',result='{}'::jsonb,error=NULL,started_at=NULL,completed_at=NULL WHERE id=$1`, [operationId]);
     await client.query('COMMIT');
@@ -111,14 +112,19 @@ async function runProgression(pool, projectId, operationId) {
       if (!planReused && !operation.payload.directorPlanned && !responderIds?.length && (state.presentationMode === 'scene' || needsChatPlan)) {
         const director = await getDirectorContext(client, projectId);
         const tensionBefore = Number(state.storyState?.tension || 0);
-        const directorStage = startStage(runId, 'director_plan', { intensity: state.dramaIntensity, tension: tensionBefore });
         let plan;
-        try {
-          plan = await generateDirectorProgressionPlan(state, participants, runId, director);
-          endStage(runId, directorStage, { action: plan.action, responders: plan.responders.map((item) => item.characterId) });
-        } catch (error) {
-          failStage(runId, directorStage, error);
-          throw error;
+        for (let attempt = 1; attempt <= 2; attempt += 1) {
+          const directorStage = startStage(runId, 'director_plan', { intensity: state.dramaIntensity, tension: tensionBefore, attempt });
+          try {
+            const correction = attempt === 2 ? '직전 출력은 미판정 WORLD_ATTEMPT가 있는데 CONTINUE를 선택해 거부되었습니다. 캐릭터의 시도와 타인의 선택을 대신하지 않으면서, INJECT_MINOR_EVENT로 환경이 확정할 수 있는 결과만 사건화하거나 필요한 다른 허용 action을 선택하세요.' : '';
+            plan = await generateDirectorProgressionPlan(state, participants, runId, director, correction);
+            endStage(runId, directorStage, { action: plan.action, responders: plan.responders.map((item) => item.characterId), attempt });
+            break;
+          } catch (error) {
+            failStage(runId, directorStage, error);
+            if (attempt === 2 || !/pending world attempt must be resolved/i.test(error.message)) throw error;
+            updateRunMetadata(runId, { directorRetry: attempt, retryReason: error.message, activePhase: '세계 행동 재판정' });
+          }
         }
         directorRuntime = plan;
         directorAction = plan.action;

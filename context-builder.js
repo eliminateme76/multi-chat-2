@@ -14,6 +14,7 @@ export function buildCharacterTurnPrompt({ character, state, memories = [], visi
   });
   const memoryText = memories.map((memory) => `- ${memory.memoryText} (당시 감정: ${memory.emotion || '기록 없음'}, 중요도: ${memory.importance})`).join('\n');
   const publicHistory = (visibleEvents.length ? visibleEvents : recentVisibleEvents).map((log) => publicLog(log, state)).join('\n\n');
+  const activeCharacters = (state.participants || []).map((participant) => state.characters.find((candidate) => candidate.id === participant.characterId)).filter(Boolean).map((candidate) => `${candidate.id} | ${candidate.name}`).join('\n');
 
   const outputStyle = state.presentationMode === 'chat'
     ? `이 장면은 메신저 단체 채팅입니다. 먼저 지금 실제로 답장할 이유가 있는지 판단하세요. 직접 질문받았거나, 감정·목표상 반응이 필요하거나, 새롭고 자연스러운 내용을 보탤 수 있을 때만 shouldRespond=true로 하세요. 같은 동의·조언·확인을 반복할 뿐이면 shouldRespond=false, dialogue/action은 빈 문자열, silenceReason에는 비공개 판단 이유를 쓰세요. 답장한다면 실제 메시지 1~2개만 쓰고 소설식 지문은 금지하며 action은 빈 문자열입니다.`
@@ -44,6 +45,7 @@ export function buildCharacterTurnPrompt({ character, state, memories = [], visi
 - 현재 딜레마: ${state.storyStatus?.dilemma || '없음'}
 - 세계의 현재 국면: ${state.dramaticState?.worldPhase || 'build'}
 - 세계가 이미 확정한 제약·결과: ${state.dramaticState?.worldPressure || '없음'}
+- 활성 참여자 ID와 이름:\n${activeCharacters || `${character.id} | ${character.name}`}
 
 이 캐릭터만 가진 관련 기억:
 ${memoryText || '- 아직 저장된 개인 기억이 없습니다.'}
@@ -56,17 +58,19 @@ ${publicHistory || '아직 공개 로그가 없습니다.'}
 2. 다른 캐릭터의 목표·비밀·기억 또는 비공개 Director 상태를 아는 척하지 마세요.
 3. ${outputStyle}
 4. 무엇을 말하고 무엇을 시도할지는 성격·목표·관계·기억에 따라 독립적으로 결정하세요. 제안의 수락·거절·회피·조건 제시 중 어느 것도 미리 정해져 있지 않습니다.
-5. 자신의 대사, 감정, 의도와 직접 통제 가능한 몸짓은 확정할 수 있지만 타인의 반응, 우연, 환경 변화, 행동의 외부 성공 여부는 확정하지 마세요. actionScope는 행동이 없으면 NONE, 자신의 몸짓처럼 결과까지 직접 통제하면 SELF, 성공 여부를 세계가 판정해야 하는 시도면 WORLD_ATTEMPT입니다. WORLD_ATTEMPT의 action에는 시도만 쓰고 성공·실패 결과를 쓰지 마세요.
-6. shouldRespond=true일 때 현재 장면을 움직이는 관찰, 질문, 선택 또는 행동을 하나 포함하세요. "다음 장면으로 가자"처럼 메타적인 장면 전환을 제안하지 마세요. 시간·장소 전환과 외부 결과는 World Director만 확정합니다.
-7. statePatch에는 실제로 바뀐 상태만 기록하세요. 목표·내적 갈등을 유지하면 setCurrentGoal/setInternalConflict는 null, 목록 변경이 없으면 각 배열은 비웁니다. 제거 항목은 기존 문자열과 정확히 같아야 합니다. 급격한 인격 변화나 초기 설정 재작성은 금지합니다.
-8. memory는 오래 유지할 가치가 있는 새 사실만 한 문장으로 작성하세요. 단순 감정 반복이나 이미 기억에 있는 내용이면 비우세요. 중요도는 0~100이며 저장할 가치가 충분할 때만 60 이상을 사용하세요.
-9. relationshipChanges에는 이 캐릭터가 상대를 바라보는 관계가 실제로 변한 경우만 -10~10 delta, 변경 뒤 관계 설명 label, 근거 reason을 작성하세요. 상대 캐릭터의 감정이나 관계를 대신 바꾸지 마세요.
-10. sceneSignal은 캐릭터의 관점에서 계속 반응할 것이 있으면 continue, 세계의 개입이 필요하면 stalled, 자신이 보기에 현재 질문이 끝났으면 complete입니다. 이는 Director가 다음 진행에서 검토할 의견이며 장면을 직접 전환하지 않습니다.
-11. shouldRespond=false이면 actionScope는 NONE이고 memory는 빈 문자열, memoryImportance는 0, relationshipChanges와 statePatch의 배열은 빈 배열, 두 set 필드는 null, sceneSignal은 continue입니다.
-12. 출력은 지정된 JSON schema만 만족해야 합니다.`;
+5. 자신의 대사, 감정, 의도와 직접 통제 가능한 몸짓은 확정할 수 있지만 타인의 반응, 우연, 환경 변화, 행동의 외부 성공 여부는 확정하지 마세요. actionScope는 행동이나 직접 답변 요구가 없으면 NONE, 자신의 몸짓처럼 결과까지 직접 통제하면 SELF입니다.
+6. 특정 참여자의 수락·거절·대답에 결과가 달린 말이나 행동은 CHARACTER_ATTEMPT로 쓰고 actionTargetId에 그 캐릭터 ID를 정확히 넣으세요. 손 내밀기, 부탁, 설득, 공격처럼 상대가 결정할 일은 세계 판정 대상이 아닙니다. 대상 캐릭터가 다음 턴에 직접 결정합니다.
+7. 환경·우연·세계 규칙에 성공 여부가 달린 시도만 WORLD_ATTEMPT로 쓰고 actionTargetId는 비우세요. 잠긴 문 열기, 단서 찾기, 위험한 도약처럼 세계가 판정할 일입니다. action에는 시도만 쓰고 성공·실패 결과를 쓰지 마세요.
+8. shouldRespond=true일 때 현재 장면을 움직이는 관찰, 질문, 선택 또는 행동을 하나 포함하세요. "다음 장면으로 가자"처럼 메타적인 장면 전환을 제안하지 마세요. 시간·장소 전환과 외부 결과는 World Director만 확정합니다.
+9. statePatch에는 실제로 바뀐 상태만 기록하세요. 목표·내적 갈등을 유지하면 setCurrentGoal/setInternalConflict는 null, 목록 변경이 없으면 각 배열은 비웁니다. 제거 항목은 기존 문자열과 정확히 같아야 합니다. 급격한 인격 변화나 초기 설정 재작성은 금지합니다.
+10. memory는 오래 유지할 가치가 있는 새 사실만 한 문장으로 작성하세요. 단순 감정 반복이나 이미 기억에 있는 내용이면 비우세요. 중요도는 0~100이며 저장할 가치가 충분할 때만 60 이상을 사용하세요.
+11. relationshipChanges에는 이 캐릭터가 상대를 바라보는 관계가 실제로 변한 경우만 -10~10 delta, 변경 뒤 관계 설명 label, 근거 reason을 작성하세요. 상대 캐릭터의 감정이나 관계를 대신 바꾸지 마세요.
+12. sceneSignal은 캐릭터의 관점에서 계속 반응할 것이 있으면 continue, 세계의 개입이 필요하면 stalled, 자신이 보기에 현재 질문이 끝났으면 complete입니다. 이는 Director가 다음 진행에서 검토할 의견이며 장면을 직접 전환하지 않습니다. CHARACTER_ATTEMPT에서는 대상의 결정이 남으므로 반드시 continue입니다.
+13. shouldRespond=false이면 actionScope는 NONE, actionTargetId는 빈 문자열이고 memory는 빈 문자열, memoryImportance는 0, relationshipChanges와 statePatch의 배열은 빈 배열, 두 set 필드는 null, sceneSignal은 continue입니다. CHARACTER_ATTEMPT가 아니어도 actionTargetId는 비웁니다.
+14. 출력은 지정된 JSON schema만 만족해야 합니다.`;
 }
 
-export function buildDirectorProgressionPrompt(state, participants) {
+export function buildDirectorProgressionPrompt(state, participants, correction = '') {
   const history = state.logs.slice(-12).map((log) => publicLog(log, state, true)).join('\n\n');
   const intensityRules = {
     gentle: '목표 긴장도 25~50. 내적 갈등, 타이밍, 현실적 제약처럼 되돌릴 수 있는 압력을 사용하세요.',
@@ -86,10 +90,11 @@ export function buildDirectorProgressionPrompt(state, participants) {
 - 미판정 캐릭터 행동: ${pendingAttempt ? `${state.characters.find((item) => item.id === pendingAttempt.characterId)?.name || '캐릭터'} · ${pendingAttempt.action}` : '없음'}
 - 참여자:\n${participants.map((item) => `${item.id} | ${item.name} | ${item.role} | ${item.emotion} | ${JSON.stringify(item.currentState || {})}`).join('\n')}
 - 최근 공개 진행:\n${history || '없음'}
+${correction ? `\n재판정 지시:\n${correction}\n` : ''}
 
 action 규칙:
 1. CONTINUE: 새 외부 사건이나 판정 없이 현재 상황에 반응할 기회가 있는 캐릭터를 1~2명 고릅니다. 같은 상황을 함께 인지한 상대가 자연스럽게 반응할 수 있을 때만 2명을 고르세요.
-2. INJECT_MINOR_EVENT: 되돌릴 수 있는 외부 사건을 발생시키거나 미판정 행동의 성공·부분 성공·실패와 현실적 결과를 사건으로 확정합니다. 미판정 행동이 있으면 CONTINUE하지 말고 우선 결과를 판정하세요.
+2. INJECT_MINOR_EVENT: 되돌릴 수 있는 외부 사건을 발생시키거나 미판정 WORLD_ATTEMPT의 성공·부분 성공·실패와 현실적 결과를 사건으로 확정합니다. CHARACTER_ATTEMPT는 대상 캐릭터의 권한이므로 세계 사건으로 중재하지 마세요. 미판정 WORLD_ATTEMPT가 있으면 CONTINUE하지 말고 우선 결과를 판정하세요.
 3. TRANSITION_SCENE: 시간·장소·상황의 의미 있는 단절이 실제로 발생할 때만 새 Scene을 설계합니다. 단지 짧은 문답이나 작은 목표 하나가 끝났다는 이유로 전환하지 마세요. 고정된 최소 대사 수는 없으며 자연스러운 완결성을 판단하세요.
 4. PROPOSE_MAJOR: 죽음, 영구 부상·이탈, 중대한 비밀 폭로, 관계 파기, 세계 설정 변경처럼 되돌리기 어려운 전개가 필요할 때만 사용하고 서로 다른 2~3개 안과 각각의 대가를 작성합니다. 자동 적용하지 않습니다.
 5. 한 캐릭터의 complete 신호만 믿지 말고 미해결 질문과 선택이 남았는지 검토하세요.

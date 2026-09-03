@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { publicDirectionForSignal } from './orchestrator.js';
 import { selectNextSpeaker } from './speaker-selector.js';
 import { endStage, failStage, startStage } from './runtime-telemetry.js';
-import { cleanCharacterState, cleanDramaticState, cleanStoryState, memoryKey, memorySimilarity, publicStoryStatus } from './story-dynamics.js';
+import { cleanCharacterState, cleanDramaticState, cleanStoryState, memoryKey, memorySimilarity, publicStoryStatus, routeCharacterInteraction } from './story-dynamics.js';
 
 export async function getStoryState(queryable, projectId) {
   const project = (await queryable.query(`
@@ -120,7 +120,7 @@ export async function persistGeneratedTurn(client, context, turn) {
   const persistThread = async (sequence) => client.query(`UPDATE characters SET active_thread_id=$2,
     active_thread_turn_count=CASE WHEN active_thread_id=$2 THEN active_thread_turn_count+1 ELSE 1 END,
     active_thread_context_tokens=CASE WHEN $4::bigint>0 THEN $4::bigint WHEN active_thread_id=$2 THEN active_thread_context_tokens ELSE 0 END,
-    thread_rollover_required=FALSE,thread_contract_version=1,last_scanned_event_sequence=$3,pending_operation_step_id=NULL,updated_at=NOW() WHERE id=$1`,
+    thread_rollover_required=FALSE,thread_contract_version=2,last_scanned_event_sequence=$3,pending_operation_step_id=NULL,updated_at=NOW() WHERE id=$1`,
   [character.id, turn.threadId, sequence, contextTokens]);
   if (!turn.shouldRespond) {
     const sequence = Number((await client.query('SELECT COALESCE(MAX(world_sequence),0) AS sequence FROM scene_entries WHERE scene_id=$1', [state.sceneId])).rows[0].sequence);
@@ -138,7 +138,7 @@ export async function persistGeneratedTurn(client, context, turn) {
   const relationshipChanges = turn.relationshipChanges.slice(0, 3).filter((change) => validTargets.has(change.targetId) && Number.isInteger(change.delta) && (change.delta !== 0 || change.label));
   await client.query("UPDATE scene_participants SET idle_at_sequence=NULL,idle_reason='',idle_at=NULL WHERE scene_id=$1 AND left_sequence IS NULL", [state.sceneId]);
   await client.query(`INSERT INTO scene_entries (id,project_id,scene_id,entry_type,character_id,dialogue,action,sort_order,world_sequence,actor_type,event_kind,payload)
-    VALUES ($1,$2,$3,'message',$4,$5,$6,$7,$8,'CHARACTER','CHARACTER_RESPONSE',$9)`, [entryId, state.projectId, state.sceneId, character.id, turn.dialogue, turn.action, await nextEntryOrder(client, state.sceneId), sequence, JSON.stringify({ dialogue: turn.dialogue, action: turn.action, actionScope: turn.actionScope, emotion: turn.emotion, sceneSignal: turn.sceneSignal, statePatch: turn.statePatch, relationshipChanges })]);
+    VALUES ($1,$2,$3,'message',$4,$5,$6,$7,$8,'CHARACTER','CHARACTER_RESPONSE',$9)`, [entryId, state.projectId, state.sceneId, character.id, turn.dialogue, turn.action, await nextEntryOrder(client, state.sceneId), sequence, JSON.stringify({ dialogue: turn.dialogue, action: turn.action, actionScope: turn.actionScope, actionTargetId: turn.actionTargetId, emotion: turn.emotion, sceneSignal: turn.sceneSignal, statePatch: turn.statePatch, relationshipChanges })]);
   await client.query(`INSERT INTO scene_entry_recipients(entry_id,character_id) SELECT $1,character_id FROM scene_participants WHERE scene_id=$2 AND left_sequence IS NULL ON CONFLICT DO NOTHING`, [entryId, state.sceneId]);
   await client.query('UPDATE characters SET emotion=$2,current_state=$3 WHERE id=$1', [character.id, turn.emotion, JSON.stringify(nextState)]);
   await persistThread(sequence);
@@ -182,13 +182,20 @@ export async function updateDirectorThread(client, projectId, runtime, sequence 
   await client.query(`UPDATE projects SET active_director_thread_id=$2,
     director_thread_turn_count=CASE WHEN active_director_thread_id=$2 THEN director_thread_turn_count+1 ELSE 1 END,
     director_thread_context_tokens=CASE WHEN $4::bigint>0 THEN $4::bigint WHEN active_director_thread_id=$2 THEN director_thread_context_tokens ELSE 0 END,
-    director_thread_rollover_required=FALSE,director_thread_contract_version=1,
+    director_thread_rollover_required=FALSE,director_thread_contract_version=2,
     last_director_event_sequence=COALESCE($3,(SELECT COALESCE(MAX(world_sequence),0) FROM scene_entries WHERE project_id=$1)),updated_at=NOW()
     WHERE id=$1`, [projectId, result.threadId, sequence, contextTokens]);
 }
 
 export async function consumePlannedResponder(client, context, turn) {
   const current = cleanDramaticState(context.state.dramaticState, context.state.characters.map((item) => item.id));
+  if (turn.actionScope === 'CHARACTER_ATTEMPT') {
+    const sequence = Number((await client.query('SELECT COALESCE(MAX(world_sequence),0) AS sequence FROM scene_entries WHERE scene_id=$1', [context.state.sceneId])).rows[0].sequence);
+    const target = context.state.characters.find((character) => character.id === turn.actionTargetId);
+    const next = routeCharacterInteraction(current, context.state.characters.map((item) => item.id), { sourceName: context.character.name, targetId: turn.actionTargetId, targetName: target?.name, sequence });
+    await client.query('UPDATE scenes SET dramatic_state=$2,updated_at=NOW() WHERE id=$1', [context.state.sceneId, JSON.stringify(next)]);
+    return next;
+  }
   if (!current.plannedResponderIds.length) return current;
   const remaining = current.plannedResponderIds[0] === context.character.id
     ? current.plannedResponderIds.slice(1)

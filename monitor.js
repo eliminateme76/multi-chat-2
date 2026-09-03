@@ -57,7 +57,7 @@ function renderDirectorPlan() {
     world.textContent = '';
     responders.innerHTML = ''; meta.textContent = '—'; return;
   }
-  const actionLabel = ({ CONTINUE: '현재 장면 계속', INJECT_MINOR_EVENT: '소규모 사건 투입', TRANSITION_SCENE: '장면 전환', PROPOSE_MAJOR: '중대 전개 제안' })[directorPlan.action] || directorPlan.action || '계획';
+  const actionLabel = ({ CONTINUE: '현재 장면 계속', INJECT_MINOR_EVENT: '소규모 사건 투입', TRANSITION_SCENE: '장면 전환', PROPOSE_MAJOR: '중대 전개 제안', CHARACTER_INTERACTION: '대상 캐릭터에게 결정권 전달' })[directorPlan.action] || directorPlan.action || '계획';
   title.textContent = actionLabel;
   const reusedNow = directorPlan.latestOperation?.status === 'RUNNING' && directorPlan.latestOperation?.reused;
   if (directorPlan.invalidated) { status.textContent = '계획 무효화'; status.className = 'invalidated'; }
