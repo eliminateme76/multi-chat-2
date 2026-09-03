@@ -33,10 +33,12 @@ assert.equal(storyState.tension, 58);
 assert.deepEqual(storyState.activeTensions.map((item) => item.id), ['witness']);
 assert.equal(storyState.recentBeats.at(-1).sequence, 8);
 
-const queue = cleanDramaticState({ participantIds: ids, plannedResponderIds: [ids[1], ids[2]], planStartedSequence: 12, responsesConsumed: 1 }, ids);
+const queue = cleanDramaticState({ participantIds: ids, plannedResponderIds: [ids[1], ids[2]], planResponderIds: [ids[0], ids[1]], planStartedSequence: 12, responsesConsumed: 1, planAction: 'CONTINUE', planRationale: '두 인물의 반응을 이어 본다.', planOperationId: 'operation-1' }, ids);
 assert.deepEqual(queue.plannedResponderIds, [ids[1], ids[2]]);
 assert.equal(queue.planStartedSequence, 12);
 assert.equal(queue.responsesConsumed, 1);
+assert.deepEqual(queue.planResponderIds, [ids[0], ids[1]]);
+assert.equal(queue.planRationale, '두 인물의 반응을 이어 본다.');
 
 const prompt = buildCharacterTurnPrompt({
   character: { id: ids[0], name: '가람', role: '탐정', gender: '여성', personality: '신중함', speechStyle: '짧은 존댓말', goal: '진실 찾기', secret: '없음', emotion: '집중', currentState: {} },

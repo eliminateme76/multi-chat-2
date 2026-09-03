@@ -7,6 +7,7 @@ const WATERFALL_SCALE_MS = 60_000;
 let runtime = { resources: {}, runs: [] };
 let projects = [];
 let threads = [];
+let directorPlan = null;
 let projectId = new URLSearchParams(location.search).get('project');
 let selectedRunId;
 let selectedStageName;
@@ -36,8 +37,39 @@ function render() {
   $('#app-server-state').className = appServer.status === 'ready' ? 'status-completed' : appServer.status === 'stopped' ? 'status-failed' : 'status-running';
   $('#app-server-detail').textContent = appServer.pid ? `PID ${appServer.pid}` : '';
   renderActiveThread();
+  renderDirectorPlan();
   renderPipeline(run); renderWaterfall(run, bottleneck); renderHistory(); renderThreads(); renderTraceTimeline();
   showNode(selectedStageName || runningStage?.name || bottleneck?.name, run);
+}
+
+function renderDirectorPlan() {
+  const title = $('#director-plan-title');
+  const status = $('#director-plan-status');
+  const rationale = $('#director-plan-rationale');
+  const responders = $('#director-plan-responders');
+  const meta = $('#director-plan-meta');
+  if (!directorPlan) {
+    title.textContent = '최근 계획 없음'; status.textContent = '대기'; status.className = '';
+    rationale.textContent = 'Director가 새 계획을 만들면 판단 이유와 응답 순서가 여기에 표시됩니다.';
+    responders.innerHTML = ''; meta.textContent = '—'; return;
+  }
+  const actionLabel = ({ CONTINUE: '현재 장면 계속', INJECT_MINOR_EVENT: '소규모 사건 투입', TRANSITION_SCENE: '장면 전환', PROPOSE_MAJOR: '중대 전개 제안' })[directorPlan.action] || directorPlan.action || '계획';
+  title.textContent = actionLabel;
+  const reusedNow = directorPlan.latestOperation?.status === 'RUNNING' && directorPlan.latestOperation?.reused;
+  if (directorPlan.invalidated) { status.textContent = '계획 무효화'; status.className = 'invalidated'; }
+  else if (reusedNow) { status.textContent = '재사용 중'; status.className = 'reused'; }
+  else if (directorPlan.valid) { status.textContent = directorPlan.responsesConsumed ? '재사용 가능' : '응답 대기'; status.className = directorPlan.responsesConsumed ? 'reused' : 'active'; }
+  else { status.textContent = '계획 완료'; status.className = 'completed'; }
+  rationale.textContent = directorPlan.rationale;
+  const remaining = new Set(directorPlan.remainingResponderIds || []);
+  responders.innerHTML = directorPlan.responders.map((responder, index) => {
+    const done = index < Number(directorPlan.responsesConsumed || 0);
+    const next = !done && !directorPlan.invalidated && directorPlan.remainingResponderIds?.[0] === responder.id;
+    const cancelled = !done && (directorPlan.invalidated || !remaining.has(responder.id));
+    const state = done ? '완료' : next ? '다음' : cancelled ? '취소' : '대기';
+    return `<div class="plan-responder ${done ? 'done' : next ? 'next' : cancelled ? 'cancelled' : ''}"><strong>${esc(responder.name)}</strong><small>${state}</small></div>`;
+  }).join('');
+  meta.textContent = `Scene ${directorPlan.sceneNumber} · seq ${directorPlan.planStartedSequence} · ${directorPlan.beatPhase || '—'}/${directorPlan.beatOutcome || '—'}${directorPlan.latestOperation?.reused ? ' · 최근 작업에서 계획 재사용' : ''}`;
 }
 
 function allTrackedThreads() {
@@ -196,9 +228,13 @@ function renderTraceChart(runs) {
 
 async function refreshThreads() {
   if (!projectId) return;
-  const response = await fetch(`/api/runtime/threads?projectId=${encodeURIComponent(projectId)}`);
-  if (!response.ok) throw new Error('스레드 상태를 불러오지 못했습니다.');
-  threads = (await response.json()).threads;
+  const [threadResponse, planResponse] = await Promise.all([
+    fetch(`/api/runtime/threads?projectId=${encodeURIComponent(projectId)}`),
+    fetch(`/api/runtime/director-plan?projectId=${encodeURIComponent(projectId)}`)
+  ]);
+  if (!threadResponse.ok || !planResponse.ok) throw new Error('런타임 상태를 불러오지 못했습니다.');
+  threads = (await threadResponse.json()).threads;
+  directorPlan = (await planResponse.json()).plan;
 }
 
 function labelFor(name) { return stages.find(([key]) => key === name)?.[2] || name; }

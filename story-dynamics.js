@@ -17,7 +17,7 @@ export function emptyStoryState() {
 }
 
 export function emptyDramaticState() {
-  return { objective: '', stakes: '', dilemma: '', beatType: 'reflection', targetTension: 35, participantIds: [], beatIntent: 'build', outcomeConstraint: 'open', pressureSource: '', reliefReason: '', plannedResponderIds: [], planStartedSequence: 0, responsesConsumed: 0 };
+  return { objective: '', stakes: '', dilemma: '', beatType: 'reflection', targetTension: 35, participantIds: [], beatIntent: 'build', outcomeConstraint: 'open', pressureSource: '', reliefReason: '', plannedResponderIds: [], planResponderIds: [], planStartedSequence: 0, responsesConsumed: 0, planAction: '', planRationale: '', planOperationId: '' };
 }
 
 export function emptyRhythmState() {
@@ -156,6 +156,8 @@ export function cleanDramaticState(value = {}, characterIds = [], fallback = {})
   const participantIds = Array.isArray(participantSource) ? [...new Set(participantSource.filter((id) => validId(id, allowed)))].slice(0, 6) : [];
   const plannedSource = Array.isArray(source.plannedResponderIds) ? source.plannedResponderIds : base.plannedResponderIds;
   const plannedResponderIds = Array.isArray(plannedSource) ? plannedSource.filter((id) => validId(id, allowed)).slice(0, 2) : [];
+  const planResponderSource = Array.isArray(source.planResponderIds) ? source.planResponderIds : base.planResponderIds;
+  const planResponderIds = Array.isArray(planResponderSource) ? planResponderSource.filter((id) => validId(id, allowed)).slice(0, 2) : [];
   return {
     objective: clean(source.objective, 240, clean(base.objective, 240)),
     stakes: clean(source.stakes, 240, clean(base.stakes, 240)),
@@ -168,8 +170,12 @@ export function cleanDramaticState(value = {}, characterIds = [], fallback = {})
     pressureSource: clean(source.pressureSource, 240, clean(base.pressureSource, 240)),
     reliefReason: clean(source.reliefReason, 240, clean(base.reliefReason, 240)),
     plannedResponderIds,
+    planResponderIds,
     planStartedSequence: Math.max(0, Number(source.planStartedSequence ?? base.planStartedSequence) || 0),
-    responsesConsumed: integer(source.responsesConsumed, 0, 2, integer(base.responsesConsumed, 0, 2, 0))
+    responsesConsumed: integer(source.responsesConsumed, 0, 2, integer(base.responsesConsumed, 0, 2, 0)),
+    planAction: clean(source.planAction, 40, clean(base.planAction, 40)),
+    planRationale: clean(source.planRationale, 500, clean(base.planRationale, 500)),
+    planOperationId: clean(source.planOperationId, 64, clean(base.planOperationId, 64))
   };
 }
 

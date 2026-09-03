@@ -237,6 +237,33 @@ app.get('/api/runtime/threads', async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+app.get('/api/runtime/director-plan', async (req, res, next) => {
+  try {
+    const projectId = projectIdFrom(req);
+    const row = (await pool.query(`SELECT s.id AS "sceneId",s.scene_number AS "sceneNumber",s.progress_signal AS "sceneSignal",s.dramatic_state AS "dramaticState",
+      COALESCE((SELECT MAX(world_sequence) FROM scene_entries WHERE project_id=$1 AND entry_type='event'),0) AS "latestEventSequence"
+      FROM scenes s WHERE s.project_id=$1 AND s.status='active' ORDER BY s.scene_number DESC LIMIT 1`, [projectId])).rows[0];
+    if (!row) return res.json({ plan: null });
+    const dramatic = row.dramaticState || {};
+    const responderIds = Array.isArray(dramatic.planResponderIds) ? dramatic.planResponderIds : [];
+    if (!dramatic.planRationale || !responderIds.length) return res.json({ plan: null });
+    const characters = responderIds.length ? (await pool.query('SELECT id,name FROM characters WHERE project_id=$1 AND id=ANY($2::uuid[])', [projectId, responderIds])).rows : [];
+    const names = new Map(characters.map((character) => [character.id, character.name]));
+    const latestOperation = (await pool.query(`SELECT id,status,payload,result,started_at AS "startedAt",completed_at AS "completedAt"
+      FROM world_operations WHERE project_id=$1 AND type='PROGRESSION' ORDER BY created_at DESC LIMIT 1`, [projectId])).rows[0] || null;
+    const remainingIds = Array.isArray(dramatic.plannedResponderIds) ? dramatic.plannedResponderIds : [];
+    const invalidated = row.sceneSignal !== 'continue' || Number(row.latestEventSequence) > Number(dramatic.planStartedSequence || 0);
+    res.json({ plan: {
+      sourceOperationId: dramatic.planOperationId || null, action: dramatic.planAction || null, rationale: dramatic.planRationale,
+      sceneId: row.sceneId, sceneNumber: row.sceneNumber, planStartedSequence: Number(dramatic.planStartedSequence || 0),
+      beatPhase: dramatic.beatIntent || null, beatOutcome: dramatic.outcomeConstraint || null,
+      responsesConsumed: Number(dramatic.responsesConsumed || 0), remainingResponderIds: invalidated ? [] : remainingIds,
+      responders: responderIds.map((id) => ({ id, name: names.get(id) || id })), valid: !invalidated && remainingIds.length > 0,
+      invalidated, latestOperation: latestOperation ? { id: latestOperation.id, status: latestOperation.status, reused: Boolean(latestOperation.result?.planReused ?? latestOperation.payload?.planReused), startedAt: latestOperation.startedAt, completedAt: latestOperation.completedAt } : null
+    } });
+  } catch (error) { next(error); }
+});
+
 app.put('/api/world', async (req, res, next) => {
   const client = await pool.connect();
   try {

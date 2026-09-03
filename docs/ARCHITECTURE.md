@@ -19,7 +19,7 @@ Every WorldCharacter keeps at most one active Codex thread. The server starts it
 
 ## Story dynamics
 
-`projects.story_state` holds the arc phase, tension, pacing, active tensions, open questions, recent beats, rhythm state and the last Director sequence. Rhythm records the current function (`build/pressure/choice/consequence/release`), planned result (`open/success/qualified_success/setback`), repeated-result count and tension direction. `scenes.dramatic_state` holds the current objective, stakes, dilemma, beat type, target tension, explicit participant ids and the current beat guidance. Character `current_state` holds the current goal, internal conflict, beliefs, commitments and development notes.
+`projects.story_state` holds the arc phase, tension, pacing, active tensions, open questions, recent beats, rhythm state and the last Director sequence. Rhythm records the current function (`build/pressure/choice/consequence/release`), planned result (`open/success/qualified_success/setback`), repeated-result count and tension direction. `scenes.dramatic_state` holds the current objective, stakes, dilemma, beat type, target tension, explicit participant ids, current beat guidance, and a sanitized Director-plan audit (action, rationale, original/remaining responders, source operation). Character `current_state` holds the current goal, internal conflict, beliefs, commitments and development notes.
 
 The user selects `gentle`, `balanced`, or `high` per world. This controls Director cadence and acceptable pressure; it does not select a model. Tension is a wave rather than a monotonic target: outside climax, a third consecutive rise is rejected, while release and unqualified success are valid after earned payoff. Repeated narrative function/outcome pairs must change without forcing an arbitrary disaster. Ordinary reversible developments may be inserted automatically. Irreversible developments are emitted as two or three `MAJOR` options, pause browser auto-progress, and require explicit apply or reject-all.
 
@@ -59,7 +59,7 @@ The browser never receives Codex credentials or direct app-server access. Codex 
 
 ## Observability
 
-Runtime telemetry is redacted and in-memory. The monitor shows active character/Director/World Builder threads, model and effort, thread turn/context-token counts, continuous timing charts, time to first token, Director-plan timing, Director action, and tension before/after. Prompts, secrets, dialogue under generation and memory text are never exposed.
+Runtime telemetry is redacted and in-memory. The monitor shows active character/Director/World Builder threads, model and effort, thread turn/context-token counts, continuous timing charts, time to first token, Director-plan timing, Director action, rationale, ordered responders, consumed/remaining responders, and tension before/after. The Director plan endpoint exposes only this sanitized audit; prompts, private state snapshots, secrets, dialogue under generation and memory text are never exposed.
 
 ## Deferred work
 

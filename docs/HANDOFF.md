@@ -11,6 +11,7 @@ Last updated: 2026-09-03 (Asia/Seoul)
 
 ## Implemented in this change
 
+- Added a persistent, sanitized Director-plan audit and a prominent monitor card showing the action, rationale, ordered responders, completed/next/cancelled state, beat, source sequence, and whether the latest operation reused the plan. Raw prompts and private Director context remain unexposed.
 - Reduced progression latency by persisting a Director responder queue for up to two character responses. Each operation now generates one response; the next operation can consume the queued responder without another Director call. New events and non-continue scene signals invalidate the queue.
 - Replaced full character/story snapshots in routine model output with compact validated patches. Before/after character snapshots remain in the audit table, while public Event payloads store only the patch and visible result metadata.
 - Added configurable character/Director thread rollover by turn count and context tokens. Existing threads are marked for one rollover, and successful calls persist turn/token counts transactionally before the old thread is cleaned up.
@@ -43,6 +44,7 @@ Last updated: 2026-09-03 (Asia/Seoul)
 - `npm run verify:api` passed against a disposable world using the real Codex app-server. It created a structured world, ran Director planning plus persistent character responses, and preserved model/thread settings.
 - The API verification also confirmed one response per operation, persisted token/counter metadata, and a second response that reused the queued Director plan without a Director call.
 - `npm run verify:latency-logic` passed for compact state patch merging, responder-queue cleaning, and visibility-safe recent context fallback.
+- The real app-server API check also verified that the sanitized Director-plan endpoint reports the generated rationale/order and changes to reused/completed after the second operation. The monitor card was visually checked at 1920×1080 in both empty and populated states.
 - A disposable clone using the production `gpt-5.6-sol` settings completed a fresh Director+character operation in 41.3s and a queued-plan character-only operation in 17.2s. The prior recent progression average was about 73s; this sample improved the full-plan request by 43% and the reused-plan request by 76% (model latency remains variable).
 
 ## Operational next checks
