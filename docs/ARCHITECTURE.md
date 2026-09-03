@@ -56,6 +56,12 @@ Utility settings
 
 The browser loads the live picker catalog through app-server `model/list`, including each model's supported reasoning efforts. The server validates project-level pairs against that catalog. `turn/start` always receives the effective `model` and `effort`, so a setting change applies on the next turn even when an existing persistent thread is resumed.
 
+The top-level `AI 스레드 설정` dialog is the unified configuration surface for the selected world. It includes character defaults, the World Director, one-shot utility work, every character (including characters whose first thread has not started), and active World Builder drafts. Character rows may independently inherit the world model and reasoning effort; every row also shows whether it has a persistent thread and its shortened thread id.
+
+`GET /api/runtime/settings` returns this complete project-scoped view. `PUT /api/runtime/settings` validates the whole submitted set against the current app-server model catalog before opening a PostgreSQL transaction, then updates project roles, character overrides, and active draft settings together. The transaction uses the project progression lock and each affected draft lock, so it cannot interleave with a progression or draft generation. A validation or ownership error rolls back the entire save. Thread-link columns are never updated by this path.
+
+Changing a persistent character, Director, or World Builder model does not create a replacement thread. The newly resolved model and effort are supplied to the next `turn/start`. Utility work remains intentionally one-shot and cleans its temporary thread after use.
+
 Runtime monitoring records and displays the effective pair. Playthrough cloning copies all runtime settings and character overrides; reset preserves them.
 
 ## World templates and playthroughs

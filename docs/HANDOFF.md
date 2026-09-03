@@ -7,40 +7,38 @@ This file is the current operational handoff between Codex sessions on the home 
 ## Current baseline
 
 - Branch: `main`
-- Remote baseline before the current local work: `71e70fd feat: configure agent models and reasoning`
 - One persistent Codex app-server process serves serialized requests.
 - Each character and the World Director has a reusable thread id, but PostgreSQL remains authoritative.
 - Runtime monitoring shows the active agent/thread, execution pipeline, waterfall, and duration timeline.
+- Conversational World Builder drafts persist their own reusable thread until creation or cancellation.
 
-## Implemented in the current unpushed work
+## Implemented in this change
 
-- Added `+ 새 월드` and a full conversational World Builder with chat on the left and editable live preview on the right.
-- Active drafts, messages, structured world data, and their reusable Codex thread ids persist in PostgreSQL and survive refreshes.
-- Each model response supplies a complete validated world, first Scene, 2–6 characters, initial relationships, a user-facing reply, and optional follow-up topics.
-- Manual preview edits use the same server validator as model output.
-- Final confirmation creates the project, initial template, characters, symmetric relationships, Scene 1 and participants in one transaction, then switches the browser to the new world.
-- Draft generation, saving, cancellation and creation are serialized with a draft advisory lock.
-- Runtime monitoring identifies World Builder runs and persistent World Builder threads separately from characters and the World Director.
-- API verification now covers a disposable saved draft and complete project creation before exercising the existing event/turn flow.
+- Added a top-bar `AI 스레드 설정` dialog that configures every runtime role in the selected world from one screen.
+- The screen groups character defaults, World Director, one-shot utility calls, every character, and active World Builder drafts. Persistent rows show their current thread id or that the first call is still pending.
+- Character model and reasoning overrides can independently inherit the world defaults. Effective values update immediately in the form.
+- Model choices and supported reasoning levels are refreshed from Codex app-server `model/list` whenever the dialog opens.
+- Added project-scoped `GET/PUT /api/runtime/settings`. The PUT validates the complete payload against the live catalog, checks character/draft ownership, and saves project roles, character overrides, and active drafts in one locked PostgreSQL transaction.
+- Runtime-setting saves never modify character, Director, or World Builder thread ids. Existing threads receive the changed model and effort on their next `turn/start`.
+- Existing world and character edit forms read the refreshed state after a centralized save, while the monitor continues to resolve current effective values directly from PostgreSQL.
 
 ## Database migration
 
-- New migration: `db/011_world_creation_drafts.sql`
-- It adds resumable world creation drafts and ordered builder messages.
-- Run `npm run migrate` after pulling. It is safe to rerun.
+- No new migration is required for the unified runtime settings screen.
+- Latest migration remains `db/011_world_creation_drafts.sql`; `npm run migrate` is safe to rerun after pulling.
 
 ## Verification completed
 
 - `npm run check` and `npm run migrate` passed.
-- Two real World Builder turns reused the same Codex thread, stored four ordered messages, kept three characters, and changed the draft to CHAT as requested.
-- `npm run verify:api` passed. It created a disposable world from a saved draft with two characters and Scene 1, then verified the existing event and Codex progression flow.
-- Desktop browser screenshot review confirmed the new entry button and two-column draft dialog fit at 1440×1000.
+- `npm run verify:api` passed with a disposable world. It saved character and active World Builder settings as `gpt-5.6-luna / medium`, rejected and fully rolled back an unavailable model, and confirmed the next real progression used the configured pair.
+- The same verification preserved all three generated character thread ids across another batch save and confirmed that restoring inheritance also preserved its character thread.
+- Headless Chrome loaded the updated application successfully, initialized PostgreSQL state, and exposed the new accessible settings trigger and dialog without a page initialization error.
 
 ## Next checks
 
-1. Exercise the World Builder on a narrow/mobile viewport and refine the stacked chat/preview height if needed.
-2. Try simultaneous edits from two browser tabs and confirm the second action waits instead of overwriting the first.
-3. Decide whether completed/cancelled draft history needs a separate archive UI; it is currently retained only in PostgreSQL.
+1. Exercise the settings dialog on a narrow/mobile viewport with six characters and several active drafts, then refine row density if necessary.
+2. Try changing settings from two browser tabs while a long character or World Builder generation is running and confirm the second save waits and then refreshes cleanly.
+3. Decide whether completed/cancelled World Builder draft history needs a separate archive UI; it is currently retained only in PostgreSQL.
 4. Exercise a real CHAT project until all participants independently reach `대화 종료` and confirm the UI settles without extra messages.
 
 ## Known limitations

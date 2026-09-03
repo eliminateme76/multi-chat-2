@@ -12,13 +12,14 @@
     <link rel="stylesheet" href="./turn-cards.css" />
     <link rel="stylesheet" href="./project-switcher.css" />
     <link rel="stylesheet" href="./world-builder.css" />
+    <link rel="stylesheet" href="./runtime-settings.css" />
   </head>
   <body>
     <main class="app-shell">
       <header class="topbar">
         <a class="brand" href="#top" aria-label="Sceneweaver 홈"><span class="brand-mark">✦</span><span>SCENEWEAVER</span></a>
         <div class="world-heading"><label class="eyebrow" for="project-select">현재 세계</label><div class="world-switcher"><select id="project-select" aria-label="세계관 선택"></select><button id="open-world-builder" class="world-create-button" type="button">＋ 새 월드</button></div><h1 id="world-title" class="sr-only">별빛 마도학원</h1></div>
-        <div class="top-actions"><span id="save-status" class="save-status">자동 저장됨</span><a id="monitor-link" href="./monitor.html" class="icon-button" title="실행 모니터" aria-label="실행 모니터">⌁</a><button id="reset-button" class="icon-button" title="데모 초기화" aria-label="데모 초기화">↺</button></div>
+        <div class="top-actions"><span id="save-status" class="save-status">자동 저장됨</span><button id="open-runtime-settings" class="icon-button" type="button" title="AI 스레드 설정" aria-label="AI 스레드 설정">⚙</button><a id="monitor-link" href="./monitor.html" class="icon-button" title="실행 모니터" aria-label="실행 모니터">⌁</a><button id="reset-button" class="icon-button" title="데모 초기화" aria-label="데모 초기화">↺</button></div>
       </header>
 
       <section class="stage" id="top">
@@ -82,6 +83,15 @@
     <dialog id="character-modal" class="modal"><form id="character-form" method="dialog" class="modal-card"><div class="modal-header"><div><span class="eyebrow">CHARACTER AGENT</span><h2 id="character-modal-title">새 캐릭터 만들기</h2></div><button type="button" class="close-button" data-close="character-modal">×</button></div><div class="form-grid"><label>이름<input name="name" required maxlength="20" /></label><label>성별<select name="gender" required><option value="여성">여성</option><option value="남성">남성</option><option value="논바이너리">논바이너리</option><option value="성별 없음">성별 없음</option></select></label><label class="full">역할<input name="role" required maxlength="40" placeholder="예: 마법 기사 견습생" /></label><label class="full">성격<input name="personality" required maxlength="120" placeholder="쉼표로 구분해 입력" /></label><label class="full">말투<input name="speechStyle" required maxlength="120" /></label><label>목표<input name="goal" required maxlength="120" /></label><label>비밀<input name="secret" required maxlength="120" /></label><div class="full ai-form-heading"><span class="eyebrow">AI RUNTIME · 비워두면 월드 기본값</span></div><label>모델<select name="modelOverride" data-model-select data-inherit="월드 기본 모델"></select></label><label>추론 수준<select name="reasoningEffortOverride" data-effort-select data-inherit="월드 기본 수준"></select></label></div><div class="modal-footer"><button type="button" id="ai-character-button" class="secondary-button">✦ 현재 장면 기반 추천</button><button class="primary-button" value="default">저장하기</button></div></form></dialog>
 
     <dialog id="world-modal" class="modal"><form id="world-form" method="dialog" class="modal-card"><div class="modal-header"><div><span class="eyebrow">WORLD BIBLE</span><h2>세계관과 장면 편집</h2></div><button type="button" class="close-button" data-close="world-modal">×</button></div><div class="form-grid"><label>세계 이름<input name="title" required maxlength="50" /></label><label>현재 장소<input name="location" required maxlength="70" /></label><label>분위기<input name="mood" required maxlength="70" /></label><label>시간<input name="time" required maxlength="40" /></label><label class="full">장면 설명<textarea name="description" required maxlength="300"></textarea></label><label class="full">세계 규칙<textarea name="rules" required maxlength="300" placeholder="쉼표로 구분해 입력"></textarea></label></div><div class="ai-runtime-settings"><span class="eyebrow">AI RUNTIME</span><div class="ai-settings-grid"><label>캐릭터 기본 모델<select name="characterModel" data-model-select></select></label><label>추론 수준<select name="characterEffort" data-effort-select></select></label><label>월드 디렉터 모델<select name="directorModel" data-model-select></select></label><label>추론 수준<select name="directorEffort" data-effort-select></select></label><label>추천·보조 모델<select name="utilityModel" data-model-select></select></label><label>추론 수준<select name="utilityEffort" data-effort-select></select></label></div><button type="button" id="save-ai-settings-button" class="secondary-button">AI 실행 설정 저장</button></div><div class="playthrough-actions"><span class="eyebrow">PLAYTHROUGH</span><p>세계관과 캐릭터 설정은 유지하고 진행만 새로 시작할 수 있습니다.</p><div><button type="button" id="clone-playthrough-button" class="secondary-button">별도 진행 만들기</button><button type="button" id="reset-playthrough-button" class="danger-button">현재 진행 초기화</button></div></div><div class="modal-footer"><button class="primary-button" value="default">세계관 변경 저장</button></div></form></dialog>
+
+    <dialog id="runtime-settings-modal" class="modal runtime-settings-modal">
+      <form id="runtime-settings-form" method="dialog" class="modal-card runtime-settings-card">
+        <header class="modal-header"><div><span class="eyebrow">AI RUNTIME</span><h2>AI 스레드 설정</h2><p>현재 월드에서 사용하는 모든 모델과 추론 수준을 한곳에서 관리합니다.</p></div><button type="button" class="close-button" data-close="runtime-settings-modal">×</button></header>
+        <div class="runtime-settings-notice"><strong>기존 스레드는 그대로 유지됩니다.</strong><span>저장한 설정은 각 작업의 다음 Codex 호출부터 적용됩니다.</span></div>
+        <div id="runtime-settings-content" class="runtime-settings-content"><div class="runtime-settings-loading">설정을 불러오는 중…</div></div>
+        <footer class="runtime-settings-footer"><span id="runtime-settings-status">모델 목록은 Codex app-server에서 불러옵니다.</span><div><button type="button" class="secondary-button" data-close="runtime-settings-modal">취소</button><button id="save-runtime-settings" class="primary-button" type="submit">전체 설정 저장</button></div></footer>
+      </form>
+    </dialog>
 
     <dialog id="world-builder-modal" class="modal world-builder-modal">
       <div id="world-builder-card" class="modal-card world-builder-card">

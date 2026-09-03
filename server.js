@@ -11,6 +11,7 @@ import { enqueueProgression, getOperation, resumeQueuedOperations } from './prog
 import { applyDirectorEvent, createDirectorSuggestions, listEventSuggestions } from './director-engine.js';
 import { clonePlaythrough, resetPlaythrough } from './project-lifecycle.js';
 import { cancelWorldDraft, converseWorldDraft, createWorldFromDraft, getWorldDraft, listWorldDrafts, saveWorldDraft, startWorldDraft } from './world-builder.js';
+import { getRuntimeSettings, updateRuntimeSettings } from './runtime-settings.js';
 
 if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required. Copy .env.example to .env.');
 const { Pool } = pg;
@@ -50,16 +51,17 @@ app.put('/api/ai-settings', async (req, res, next) => {
   try {
     const projectId = projectIdFrom(req);
     const settings = req.body;
-    const values = [projectId, modelName(settings.characterModel), reasoningEffort(settings.characterEffort), modelName(settings.directorModel), reasoningEffort(settings.directorEffort), modelName(settings.utilityModel), reasoningEffort(settings.utilityEffort)];
-    if (values.slice(1).some((value) => value == null)) throw new Error('All AI runtime settings are required.');
-    const catalog = new Map((await listCodexModels()).map((model) => [model.id, model]));
-    for (const [model, effort] of [[values[1],values[2]],[values[3],values[4]],[values[5],values[6]]]) {
-      if (!catalog.has(model)) throw new Error(`사용할 수 없는 모델입니다: ${model}`);
-      if (!catalog.get(model).efforts.includes(effort)) throw new Error(`${model}에서 지원하지 않는 추론 수준입니다: ${effort}`);
-    }
-    const result = await pool.query(`UPDATE projects SET default_model=$2,default_reasoning_effort=$3,director_model=$4,director_reasoning_effort=$5,
-      utility_model=$6,utility_reasoning_effort=$7,updated_at=NOW() WHERE id=$1`, values);
-    if (!result.rowCount) return res.status(404).json({ error: 'Project not found.' });
+    const current = await getRuntimeSettings(pool, projectId);
+    if (!current) return res.status(404).json({ error: 'Project not found.' });
+    await updateRuntimeSettings(pool, projectId, {
+      project: {
+        character: { model: modelName(settings.characterModel), reasoningEffort: reasoningEffort(settings.characterEffort) },
+        director: { model: modelName(settings.directorModel), reasoningEffort: reasoningEffort(settings.directorEffort) },
+        utility: { model: modelName(settings.utilityModel), reasoningEffort: reasoningEffort(settings.utilityEffort) }
+      },
+      characters: current.characters.map((character) => ({ id: character.id, modelOverride: character.modelOverride, reasoningEffortOverride: character.reasoningEffortOverride })),
+      worldBuilders: current.worldBuilders.map((builder) => ({ id: builder.id, model: builder.model, reasoningEffort: builder.reasoningEffort }))
+    }, await listCodexModels());
     res.json(await getStoryState(pool, projectId));
   } catch (error) { next(error); }
 });
@@ -143,6 +145,19 @@ app.get('/api/state', async (req, res, next) => {
     if (!state) return res.status(404).json({ error: 'Project not found. Run npm run migrate.' });
     res.json(state);
   } catch (error) { next(error); }
+});
+
+app.get('/api/runtime/settings', async (req, res, next) => {
+  try {
+    const settings = await getRuntimeSettings(pool, projectIdFrom(req));
+    if (!settings) return res.status(404).json({ error: 'Project not found.' });
+    res.json(settings);
+  } catch (error) { next(error); }
+});
+
+app.put('/api/runtime/settings', async (req, res, next) => {
+  try { res.json(await updateRuntimeSettings(pool, projectIdFrom(req), req.body, await listCodexModels())); }
+  catch (error) { next(error); }
 });
 
 app.get('/api/operations/:id', async (req, res, next) => {

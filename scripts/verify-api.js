@@ -15,9 +15,12 @@ let serverOutput = '';
 let createdWorldId;
 let worldDraftId;
 const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
-const request = async (path, options) => {
+const requestResponse = async (path, options) => {
   const separator = path.includes('?') ? '&' : '?';
-  const response = await fetch(`${baseUrl}${path}${separator}projectId=${projectId}`, options);
+  return fetch(`${baseUrl}${path}${separator}projectId=${projectId}`, options);
+};
+const request = async (path, options) => {
+  const response = await requestResponse(path, options);
   if (!response.ok) throw new Error(`${path}: ${await response.text()}`);
   return response.json();
 };
@@ -49,8 +52,28 @@ try {
   server.stdout.on('data', (chunk) => { serverOutput += chunk; });
   server.stderr.on('data', (chunk) => { serverOutput += chunk; });
   await waitForServer();
+  const catalog = (await request('/api/models')).models;
+  const testModel = catalog.find((model) => model.id === 'gpt-5.6-luna') || catalog[0];
+  if (!testModel?.efforts?.length) throw new Error('Codex model catalog did not provide a usable model and reasoning effort.');
+  const testEffort = testModel.efforts.includes(testModel.defaultEffort) ? testModel.defaultEffort : testModel.efforts[0];
   const worldDraft = await request('/api/world-drafts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
   worldDraftId = worldDraft.id;
+  const initialRuntimeSettings = await request('/api/runtime/settings');
+  if (!initialRuntimeSettings.worldBuilders.some((builder) => builder.id === worldDraftId)) throw new Error('Active World Builder is missing from runtime settings.');
+  const runtimePayload = {
+    project: initialRuntimeSettings.project,
+    characters: initialRuntimeSettings.characters.map((character) => ({ id: character.id, modelOverride: testModel.id, reasoningEffortOverride: testEffort })),
+    worldBuilders: initialRuntimeSettings.worldBuilders.map((builder) => ({ id: builder.id, model: testModel.id, reasoningEffort: testEffort }))
+  };
+  const savedRuntimeSettings = await request('/api/runtime/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(runtimePayload) });
+  if (savedRuntimeSettings.characters.some((character) => character.effectiveModel !== testModel.id || character.effectiveReasoningEffort !== testEffort)) throw new Error('Character runtime settings were not saved.');
+  if (savedRuntimeSettings.worldBuilders.some((builder) => builder.model !== testModel.id || builder.reasoningEffort !== testEffort)) throw new Error('World Builder runtime settings were not saved.');
+  const invalidPayload = structuredClone(runtimePayload);
+  invalidPayload.project.character.model = 'unavailable-verification-model';
+  const invalidResponse = await requestResponse('/api/runtime/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(invalidPayload) });
+  if (invalidResponse.ok) throw new Error('Invalid runtime settings were accepted.');
+  const afterRejectedSettings = await request('/api/runtime/settings');
+  if (afterRejectedSettings.project.character.model !== savedRuntimeSettings.project.character.model || afterRejectedSettings.characters.some((character) => character.effectiveModel !== testModel.id)) throw new Error('Rejected runtime settings partially changed the database.');
   await request(`/api/world-drafts/${worldDraftId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ draft: {
     world: { title: '초안 검증 세계', location: '빈 역 승강장', mood: '고요한 미스터리', time: '막차가 끊긴 밤', description: '두 인물이 오지 않는 열차를 기다리고 있다.', rules: '시간표에 없는 열차에는 함부로 타지 않는다.', presentationMode: 'scene' },
     characters: [
@@ -75,7 +98,25 @@ try {
   const afterTurn = await request('/api/state');
   if (afterEvent.sceneNumber !== before.sceneNumber || afterEvent.logs.length !== before.logs.length + 1 || afterEvent.logs.at(-1).type !== 'event') throw new Error('Mid-conversation event validation failed.');
   if (afterTurn.logs.length < before.logs.length + 2 || afterTurn.logs.at(-1).type !== 'message' || afterTurn.turn <= before.turn) throw new Error('Turn persistence validation failed.');
-  console.log(JSON.stringify({ createdWorldId, createdCharacters: createdWorld.state.characters.length, beforeScene: before.sceneNumber, afterScene: afterEvent.sceneNumber, afterTurn: afterTurn.turn, signal: afterTurn.sceneSignal }, null, 2));
+  const runtimeSnapshot = await request('/api/runtime/snapshot');
+  const progressionRun = runtimeSnapshot.runs.find((run) => run.projectId === projectId && run.type === 'progression' && run.status === 'completed');
+  const characterGeneration = progressionRun?.stages.find((stage) => stage.name === 'model_generate' && stage.metadata.usage?.startsWith('캐릭터 응답'));
+  if (!characterGeneration || characterGeneration.metadata.model !== testModel.id || characterGeneration.metadata.effort !== testEffort) throw new Error('The configured model/effort was not used by the next progression.');
+  const settingsWithThreads = await request('/api/runtime/settings');
+  const threadIdsBeforeSave = new Map(settingsWithThreads.characters.map((character) => [character.id, character.threadId]));
+  const preservePayload = {
+    project: settingsWithThreads.project,
+    characters: settingsWithThreads.characters.map((character) => ({ id: character.id, modelOverride: character.modelOverride, reasoningEffortOverride: character.reasoningEffortOverride })),
+    worldBuilders: settingsWithThreads.worldBuilders.map((builder) => ({ id: builder.id, model: builder.model, reasoningEffort: builder.reasoningEffort }))
+  };
+  const settingsAfterSave = await request('/api/runtime/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(preservePayload) });
+  if (settingsAfterSave.characters.some((character) => character.threadId !== threadIdsBeforeSave.get(character.id))) throw new Error('Saving runtime settings replaced a character thread id.');
+  preservePayload.characters[0].modelOverride = null;
+  preservePayload.characters[0].reasoningEffortOverride = null;
+  const inheritedSettings = await request('/api/runtime/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(preservePayload) });
+  const inheritedCharacter = inheritedSettings.characters.find((character) => character.id === preservePayload.characters[0].id);
+  if (inheritedCharacter.modelOverride !== null || inheritedCharacter.reasoningEffortOverride !== null || inheritedCharacter.effectiveModel !== inheritedSettings.project.character.model || inheritedCharacter.threadId !== threadIdsBeforeSave.get(inheritedCharacter.id)) throw new Error('Character inheritance did not preserve the existing thread.');
+  console.log(JSON.stringify({ createdWorldId, createdCharacters: createdWorld.state.characters.length, configuredModel: testModel.id, configuredEffort: testEffort, preservedThreads: [...threadIdsBeforeSave.values()].filter(Boolean).length, inheritedCharacter: inheritedCharacter.name, beforeScene: before.sceneNumber, afterScene: afterEvent.sceneNumber, afterTurn: afterTurn.turn, signal: afterTurn.sceneSignal }, null, 2));
 } finally {
   server?.kill();
   if (createdWorldId) await pool.query('DELETE FROM projects WHERE id=$1', [createdWorldId]);

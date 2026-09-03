@@ -20,6 +20,8 @@ let worldDrafts = [];
 let activeWorldDraft = null;
 let worldDraftBusy = false;
 let worldDraftDirty = false;
+let runtimeSettings = null;
+let runtimeSettingsBusy = false;
 const ALL_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
 const $ = (selector) => document.querySelector(selector);
 const esc = (text) => String(text).replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
@@ -218,6 +220,133 @@ function openWorldModal() { const form = $('#world-form'); Object.entries(state.
 async function saveWorld() { const form = $('#world-form'); if (!form.reportValidity()) return; try { setState(await api('/api/world', { method: 'PUT', body: JSON.stringify(Object.fromEntries(new FormData(form))) })); $('#world-modal').close(); } catch (error) { alert(error.message); } }
 async function saveAiSettings() { const form = $('#world-form'); const data = Object.fromEntries(new FormData(form)); try { setState(await api('/api/ai-settings', { method: 'PUT', body: JSON.stringify(data) })); $('#save-status').textContent = 'AI 실행 설정 저장됨'; } catch (error) { alert(error.message); } }
 
+const shortThreadId = (threadId) => threadId ? `${threadId.slice(0, 8)}…${threadId.slice(-6)}` : '';
+function runtimeSettingRow({ owner, id = '', title, badge, badgeClass = '', threadId = null, threadLabel = '', model, reasoningEffort, inherit = false }) {
+  const identity = threadId ? `스레드 ${shortThreadId(threadId)}` : threadLabel;
+  return `<article class="runtime-setting-row" data-runtime-owner="${esc(owner)}" data-runtime-id="${esc(id)}">
+    <div class="runtime-setting-identity"><div class="runtime-setting-title"><strong>${esc(title)}</strong><span class="runtime-kind-badge ${esc(badgeClass)}">${esc(badge)}</span></div><span class="runtime-setting-thread" title="${esc(threadId || identity)}">${esc(identity)}</span></div>
+    <label>모델<select data-runtime-model ${inherit ? 'data-inherit="월드 기본 모델"' : ''} data-initial="${esc(model || '')}"></select></label>
+    <label>추론 수준<select data-runtime-effort ${inherit ? 'data-inherit="월드 기본 수준"' : ''} data-initial="${esc(reasoningEffort || '')}"></select><span class="runtime-effective"></span></label>
+  </article>`;
+}
+
+function runtimeProjectRow(owner) { return $(`[data-runtime-owner="${owner}"]`); }
+function effectiveRuntimeModel(row) {
+  const selected = row.querySelector('[data-runtime-model]').value;
+  if (selected) return selected;
+  return runtimeProjectRow('project-character')?.querySelector('[data-runtime-model]').value || state.aiSettings.character.model;
+}
+function effectiveRuntimeEffort(row) {
+  const selected = row.querySelector('[data-runtime-effort]').value;
+  if (selected) return selected;
+  return runtimeProjectRow('project-character')?.querySelector('[data-runtime-effort]').value || state.aiSettings.character.reasoningEffort;
+}
+function updateRuntimeEffective(row) {
+  const effective = row.querySelector('.runtime-effective');
+  if (effective) effective.textContent = `적용값 · ${effectiveRuntimeModel(row)} · ${effectiveRuntimeEffort(row)}`;
+}
+function refreshRuntimeEffort(row, preferred = '') {
+  const effortSelect = row.querySelector('[data-runtime-effort]');
+  const modelId = effectiveRuntimeModel(row);
+  const model = modelCatalog.find((item) => item.id === modelId);
+  let next = preferred;
+  const inheritedEffort = runtimeProjectRow('project-character')?.querySelector('[data-runtime-effort]').value || state.aiSettings.character.reasoningEffort;
+  if (model?.efforts?.length) {
+    const effectivePreferred = next || (effortSelect.dataset.inherit ? inheritedEffort : '');
+    if (!model.efforts.includes(effectivePreferred)) next = model.defaultEffort && model.efforts.includes(model.defaultEffort) ? model.defaultEffort : model.efforts[0];
+  }
+  fillEffortSelect(effortSelect, modelId, next);
+  updateRuntimeEffective(row);
+}
+function refreshCharacterRuntimeRows() {
+  document.querySelectorAll('[data-runtime-owner="character"]').forEach((row) => refreshRuntimeEffort(row, row.querySelector('[data-runtime-effort]').value));
+}
+function wireRuntimeSettingsRows() {
+  document.querySelectorAll('.runtime-setting-row').forEach((row) => {
+    const modelSelect = row.querySelector('[data-runtime-model]');
+    const effortSelect = row.querySelector('[data-runtime-effort]');
+    fillModelSelect(modelSelect, modelSelect.dataset.initial || '');
+    refreshRuntimeEffort(row, effortSelect.dataset.initial || '');
+    modelSelect.onchange = () => {
+      refreshRuntimeEffort(row, effortSelect.value);
+      if (row.dataset.runtimeOwner === 'project-character') refreshCharacterRuntimeRows();
+    };
+    effortSelect.onchange = () => {
+      if (effortSelect.dataset.inherit && !effortSelect.value) refreshRuntimeEffort(row, '');
+      else updateRuntimeEffective(row);
+      if (row.dataset.runtimeOwner === 'project-character') refreshCharacterRuntimeRows();
+    };
+  });
+}
+function renderRuntimeSettings() {
+  const content = $('#runtime-settings-content');
+  if (!runtimeSettings) { content.innerHTML = '<div class="runtime-settings-loading">설정을 불러오는 중…</div>'; return; }
+  const project = runtimeSettings.project;
+  content.innerHTML = `<section class="runtime-settings-group"><div class="runtime-settings-group-heading"><div><span class="eyebrow">WORLD DEFAULTS</span><h3>월드 공통 작업</h3></div><span>역할별 기본 실행 설정</span></div>
+    ${runtimeSettingRow({ owner: 'project-character', title: project.character.name, badge: 'DEFAULT', threadLabel: '개별 설정이 없는 캐릭터가 상속', model: project.character.model, reasoningEffort: project.character.reasoningEffort })}
+    ${runtimeSettingRow({ owner: 'project-director', title: project.director.name, badge: 'DIRECTOR', threadId: project.director.threadId, threadLabel: '첫 호출 전 · 스레드 없음', model: project.director.model, reasoningEffort: project.director.reasoningEffort })}
+    ${runtimeSettingRow({ owner: 'project-utility', title: project.utility.name, badge: 'ONE-SHOT', badgeClass: 'utility', threadLabel: '호출마다 임시 스레드 생성 후 정리', model: project.utility.model, reasoningEffort: project.utility.reasoningEffort })}</section>
+    <section class="runtime-settings-group"><div class="runtime-settings-group-heading"><div><span class="eyebrow">CHARACTER THREADS</span><h3>캐릭터</h3></div><span>${runtimeSettings.characters.length}명 · 개별 설정 또는 월드 기본값</span></div>
+    ${runtimeSettings.characters.length ? runtimeSettings.characters.map((character) => runtimeSettingRow({ owner: 'character', id: character.id, title: character.name, badge: 'CHARACTER', threadId: character.threadId, threadLabel: '첫 응답 전 · 스레드 없음', model: character.modelOverride, reasoningEffort: character.reasoningEffortOverride, inherit: true })).join('') : '<div class="runtime-empty">등록된 캐릭터가 없습니다.</div>'}</section>
+    <section class="runtime-settings-group"><div class="runtime-settings-group-heading"><div><span class="eyebrow">WORLD BUILDERS</span><h3>진행 중인 월드 설계자</h3></div><span>${runtimeSettings.worldBuilders.length}개 · 초안별 지속 스레드</span></div>
+    ${runtimeSettings.worldBuilders.length ? runtimeSettings.worldBuilders.map((builder) => runtimeSettingRow({ owner: 'world-builder', id: builder.id, title: builder.name, badge: 'BUILDER', badgeClass: 'builder', threadId: builder.threadId, threadLabel: '첫 대화 전 · 스레드 없음', model: builder.model, reasoningEffort: builder.reasoningEffort })).join('') : '<div class="runtime-empty">진행 중인 월드 초안이 없습니다.</div>'}</section>`;
+  wireRuntimeSettingsRows();
+}
+function setRuntimeSettingsBusy(busy, status = '') {
+  runtimeSettingsBusy = busy;
+  $('#runtime-settings-form').dataset.busy = String(busy);
+  $('#save-runtime-settings').disabled = busy;
+  $('#save-runtime-settings').textContent = busy ? '저장 중…' : '전체 설정 저장';
+  if (status) $('#runtime-settings-status').textContent = status;
+}
+async function openRuntimeSettings() {
+  runtimeSettings = null;
+  renderRuntimeSettings();
+  $('#runtime-settings-modal').showModal();
+  setRuntimeSettingsBusy(true, 'Codex app-server에서 모델 목록을 확인하는 중…');
+  try {
+    const [catalog, settings] = await Promise.all([api('/api/models'), api('/api/runtime/settings')]);
+    modelCatalog = catalog.models || [];
+    runtimeSettings = settings;
+    renderRuntimeSettings();
+    setRuntimeSettingsBusy(false, '기존 스레드 유지 · 다음 호출부터 적용');
+  } catch (error) {
+    setRuntimeSettingsBusy(false, '설정을 불러오지 못했습니다.');
+    alert(error.message);
+  }
+}
+function collectRuntimeSettings() {
+  const readPair = (owner) => {
+    const row = runtimeProjectRow(owner);
+    return { model: row.querySelector('[data-runtime-model]').value, reasoningEffort: row.querySelector('[data-runtime-effort]').value };
+  };
+  return {
+    project: { character: readPair('project-character'), director: readPair('project-director'), utility: readPair('project-utility') },
+    characters: runtimeSettings.characters.map((character) => {
+      const row = $(`[data-runtime-owner="character"][data-runtime-id="${character.id}"]`);
+      return { id: character.id, modelOverride: row.querySelector('[data-runtime-model]').value || null, reasoningEffortOverride: row.querySelector('[data-runtime-effort]').value || null };
+    }),
+    worldBuilders: runtimeSettings.worldBuilders.map((builder) => {
+      const row = $(`[data-runtime-owner="world-builder"][data-runtime-id="${builder.id}"]`);
+      return { id: builder.id, model: row.querySelector('[data-runtime-model]').value, reasoningEffort: row.querySelector('[data-runtime-effort]').value };
+    })
+  };
+}
+async function saveRuntimeSettings(event) {
+  event.preventDefault();
+  if (!runtimeSettings || runtimeSettingsBusy) return;
+  setRuntimeSettingsBusy(true, '전체 설정을 검증하고 저장하는 중…');
+  try {
+    runtimeSettings = await api('/api/runtime/settings', { method: 'PUT', body: JSON.stringify(collectRuntimeSettings()) });
+    setState(await api('/api/state'));
+    $('#save-status').textContent = 'AI 스레드 설정 저장됨';
+    $('#runtime-settings-modal').close();
+  } catch (error) {
+    setRuntimeSettingsBusy(false, '저장되지 않았습니다. 값을 확인해 주세요.');
+    alert(error.message);
+  }
+}
+
 function setWorldDraftBusy(busy, message = '') {
   worldDraftBusy = busy;
   $('#world-builder-card')?.setAttribute('data-busy', String(busy));
@@ -379,6 +508,7 @@ $('#advance-button').onclick = advanceTurn;
 $('#auto-button').onclick = () => { if (autoEnabled) stopAutoProgress(); else { autoEnabled = true; scheduleAutoTurn(0); } renderTurnControls(); };
 $('#auto-event-button').onclick = () => { autoEventEnabled = !autoEventEnabled; if (!autoEventEnabled) turnsSinceAutoEvent = 0; renderTurnControls(); };
 $('#open-character-modal').onclick = () => openCharacterModal(); $('#open-world-modal').onclick = openWorldModal;
+$('#open-runtime-settings').onclick = openRuntimeSettings;
 $('#open-world-builder').onclick = openWorldBuilder;
 $('#open-world-modal-from-scene').onclick = openWorldModal;
 $('#open-tools-button').onclick = () => setToolsOpen(true);
@@ -398,6 +528,7 @@ $('#character-form').onsubmit = (event) => { event.preventDefault(); saveCharact
 $('#reset-playthrough-button').onclick = resetCurrentPlaythrough;
 $('#clone-playthrough-button').onclick = cloneCurrentPlaythrough;
 $('#save-ai-settings-button').onclick = saveAiSettings;
+$('#runtime-settings-form').onsubmit = saveRuntimeSettings;
 $('#world-builder-chat-form').onsubmit = sendWorldDraftMessage;
 $('#new-world-draft').onclick = newWorldDraft;
 $('#save-world-draft').onclick = persistWorldDraft;
