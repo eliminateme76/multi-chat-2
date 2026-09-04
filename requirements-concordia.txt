@@ -1,0 +1,2 @@
+gdm-concordia==2.4.0
+pytest==9.1.1

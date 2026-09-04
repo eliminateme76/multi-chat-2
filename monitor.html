@@ -6,10 +6,11 @@
     <title>Sceneweaver Runtime Monitor</title>
     <link rel="stylesheet" href="./monitor.css" />
     <link rel="stylesheet" href="./monitor-director.css" />
+    <link rel="stylesheet" href="./monitor-concordia.css" />
   </head>
   <body>
     <header class="monitor-topbar">
-      <a href="/" class="brand">✦ SCENEWEAVER</a>
+      <a href="/" class="brand">✦ SCENEWEAVER <small>CONCORDIA 2.4</small></a>
       <div><span>RUNTIME MONITOR</span><strong id="connection-state">연결 중</strong></div>
       <select id="monitor-project" aria-label="모니터링할 세계관"></select>
     </header>
@@ -23,7 +24,7 @@
         <article class="primary-status"><span>현재 상태</span><strong id="run-status">대기</strong><small id="run-detail">새 요청을 기다리고 있습니다</small></article>
         <article><span>현재 단계</span><strong id="current-stage">대기</strong><small id="current-stage-time">—</small></article>
         <article><span>병목 구간</span><strong id="bottleneck">—</strong></article>
-        <article><span>총 시간 · APP SERVER</span><strong><span id="total-duration">—</span> · <span id="app-server-state">대기</span></strong><small id="app-server-detail"></small></article>
+        <article><span>총 시간 · RUNTIME</span><strong><span id="total-duration">—</span> · <span id="app-server-state">대기</span></strong><small id="app-server-detail"></small><small id="concordia-worker-detail"></small></article>
       </section>
 
       <section class="director-plan-panel">

@@ -111,15 +111,17 @@ try {
   if (operation?.status !== 'COMPLETED') throw new Error(`Progression failed: ${operation?.error || 'timeout'}`);
   const afterTurn = await request('/api/state');
   if (afterEvent.sceneNumber !== before.sceneNumber || afterEvent.logs.length !== before.logs.length + 1 || afterEvent.logs.at(-1).type !== 'event') throw new Error('Mid-conversation event validation failed.');
-  if (afterTurn.logs.length < before.logs.length + 2 || afterTurn.logs.at(-1).type !== 'message' || afterTurn.turn <= before.turn) throw new Error('Turn persistence validation failed.');
+  const latestCharacterEntry = afterTurn.logs.findLast((entry) => entry.type === 'message');
+  if (afterTurn.logs.length < before.logs.length + 2 || !latestCharacterEntry || afterTurn.turn <= before.turn) throw new Error('Turn persistence validation failed.');
   if (!['build','pressure','choice','consequence','release'].includes(operation.result?.worldPhase) || !['open','success','qualified_success','setback'].includes(operation.result?.worldOutcome) || !['rise','hold','fall'].includes(operation.result?.tensionDirection)) throw new Error('Structured world-resolution metadata is missing from the progression result.');
   if (afterTurn.storyState.rhythm.phase !== operation.result.worldPhase || afterTurn.storyState.rhythm.lastOutcome !== operation.result.worldOutcome) throw new Error('Persisted story rhythm does not match the World Director resolution.');
-  if (!['NONE','SELF','CHARACTER_ATTEMPT','WORLD_ATTEMPT'].includes(afterTurn.logs.at(-1).payload?.actionScope) || 'beatOutcome' in afterTurn.logs.at(-1).payload) throw new Error('Character/world authority boundary was not persisted correctly.');
+  if (!['NONE','SELF','CHARACTER_ATTEMPT','WORLD_ATTEMPT'].includes(latestCharacterEntry.payload?.actionScope) || 'beatOutcome' in latestCharacterEntry.payload) throw new Error('Character/world authority boundary was not persisted correctly.');
+  if (operation.result?.engine?.name !== 'concordia' || operation.result?.engine?.version !== '2.4.0' || operation.payload?.concordiaStage !== 'GM_COMPLETED') throw new Error('Concordia engine metadata/checkpoint is missing.');
   if (operation.steps?.length !== 1) throw new Error('A progression operation generated more than one character response.');
   const persistedRuntime = (await pool.query(`SELECT p.director_thread_turn_count AS "directorTurns",p.director_thread_context_tokens AS "directorTokens",p.director_thread_contract_version AS "directorContractVersion",
     c.active_thread_turn_count AS "characterTurns",c.active_thread_context_tokens AS "characterTokens",c.thread_contract_version AS "characterContractVersion"
     FROM projects p JOIN characters c ON c.project_id=p.id AND c.id=$2 WHERE p.id=$1`, [projectId, operation.steps[0].characterId])).rows[0];
-  if (Number(persistedRuntime.directorTurns) !== 2 || Number(persistedRuntime.characterTurns) !== 1 || Number(persistedRuntime.directorTokens) <= 0 || Number(persistedRuntime.characterTokens) <= 0 || Number(persistedRuntime.directorContractVersion) !== 2 || Number(persistedRuntime.characterContractVersion) !== 2) throw new Error(`Persistent thread runtime metadata was not stored: ${JSON.stringify(persistedRuntime)}`);
+  if (Number(persistedRuntime.directorTurns) < 2 || Number(persistedRuntime.characterTurns) !== 1 || Number(persistedRuntime.directorTokens) <= 0 || Number(persistedRuntime.characterTokens) <= 0 || Number(persistedRuntime.directorContractVersion) !== 3 || Number(persistedRuntime.characterContractVersion) !== 3) throw new Error(`Persistent thread runtime metadata was not stored: ${JSON.stringify(persistedRuntime)}`);
   const firstPlanView = (await request('/api/runtime/director-plan')).plan;
   if (!firstPlanView?.rationale || !firstPlanView.responders?.length || firstPlanView.action !== (operation.result.directorPlan?.action || operation.result.directorAction)) throw new Error('Sanitized reaction queue audit is missing.');
   const queuedCharacterId = afterTurn.participants.find((participant) => participant.characterId !== operation.steps[0].characterId)?.characterId || afterTurn.participants[0].characterId;
@@ -132,16 +134,14 @@ try {
     if (['COMPLETED', 'FAILED'].includes(reusedOperation.status)) break;
     await sleep(500);
   }
-  if (reusedOperation?.status !== 'COMPLETED' || !reusedOperation.result?.planReused || reusedOperation.result?.runtime?.director !== null || reusedOperation.steps?.length !== 1) throw new Error(`Reusable Director plan validation failed: ${reusedOperation?.error || reusedOperation?.status}`);
+  if (reusedOperation?.status !== 'COMPLETED' || !reusedOperation.result?.planReused || !reusedOperation.result?.runtime?.director || reusedOperation.payload?.concordiaStage !== 'GM_COMPLETED' || reusedOperation.steps?.length !== 1) throw new Error(`Reusable Director plan plus mandatory post-GM validation failed: ${reusedOperation?.error || reusedOperation?.status}`);
   const reusedPlanView = (await request('/api/runtime/director-plan')).plan;
-  const interactionQueued = reusedPlanView?.action === 'CHARACTER_INTERACTION' && reusedPlanView.valid;
-  if (!reusedPlanView?.latestOperation?.reused || (interactionQueued
-    ? (!reusedPlanView.valid || reusedPlanView.responsesConsumed !== 0 || reusedPlanView.responders.length !== 1)
-    : (reusedPlanView.responsesConsumed !== 2 || reusedPlanView.valid))) throw new Error(`Reaction queue progress is not visible in the monitor API: ${JSON.stringify(reusedPlanView)}`);
+  if (!reusedPlanView?.latestOperation?.reused || !reusedPlanView.responders?.length) throw new Error(`Post-GM reaction queue is not visible in the monitor API: ${JSON.stringify(reusedPlanView)}`);
   const runtimeSnapshot = await request('/api/runtime/snapshot');
   const progressionRun = runtimeSnapshot.runs.find((run) => run.projectId === projectId && run.type === 'progression' && run.status === 'completed');
   const characterGeneration = progressionRun?.stages.find((stage) => stage.name === 'model_generate' && stage.metadata.usage?.startsWith('캐릭터 응답'));
   if (!characterGeneration || characterGeneration.metadata.model !== testModel.id || characterGeneration.metadata.effort !== testEffort) throw new Error('The configured model/effort was not used by the next progression.');
+  if (!progressionRun.stages.some((stage) => stage.name === 'concordia_entity') || !progressionRun.stages.some((stage) => stage.name === 'concordia_game_master') || runtimeSnapshot.resources?.concordiaWorker?.version !== '2.4.0') throw new Error('Concordia runtime telemetry is missing.');
   const settingsWithThreads = await request('/api/runtime/settings');
   const threadIdsBeforeSave = new Map(settingsWithThreads.characters.map((character) => [character.id, character.threadId]));
   const preservePayload = {

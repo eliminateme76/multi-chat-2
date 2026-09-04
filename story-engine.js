@@ -6,7 +6,7 @@ import { cleanCharacterState, cleanDramaticState, cleanStoryState, memoryKey, me
 
 export async function getStoryState(queryable, projectId) {
   const project = (await queryable.query(`
-    SELECT p.id,p.title,p.rules,p.turn_number AS turn,p.default_model AS "defaultModel",p.default_reasoning_effort AS "defaultReasoningEffort",
+    SELECT p.id,p.title,p.rules,p.turn_number AS turn,p.simulation_engine AS "simulationEngine",p.simulation_engine_version AS "simulationEngineVersion",p.default_model AS "defaultModel",p.default_reasoning_effort AS "defaultReasoningEffort",
       COALESCE(p.director_model,p.default_model) AS "directorModel",p.director_reasoning_effort AS "directorReasoningEffort",
       COALESCE(p.utility_model,p.default_model) AS "utilityModel",p.utility_reasoning_effort AS "utilityReasoningEffort",
       p.drama_intensity AS "dramaIntensity",p.story_state AS "storyState",
@@ -40,7 +40,7 @@ export async function getStoryState(queryable, projectId) {
     WHERE e.project_id=$1
     ORDER BY s.scene_number,e.sort_order,e.created_at`, [projectId]);
   return {
-    projectId: project.id, sceneId: project.sceneId,
+    projectId: project.id, sceneId: project.sceneId, simulationEngine: project.simulationEngine, simulationEngineVersion: project.simulationEngineVersion,
     world: { title: project.title, location: project.location, mood: project.mood, time: project.time, description: project.description, rules: project.rules, dramaIntensity: project.dramaIntensity },
     sceneNumber: project.sceneNumber, sceneSummary: project.sceneSummary, sceneSignal: project.sceneSignal, presentationMode: project.presentationMode,
     publicDirection: project.publicDirection, directorNote: project.publicDirection, turn: project.turn, dramaIntensity: project.dramaIntensity,
@@ -120,7 +120,7 @@ export async function persistGeneratedTurn(client, context, turn) {
   const persistThread = async (sequence) => client.query(`UPDATE characters SET active_thread_id=$2,
     active_thread_turn_count=CASE WHEN active_thread_id=$2 THEN active_thread_turn_count+1 ELSE 1 END,
     active_thread_context_tokens=CASE WHEN $4::bigint>0 THEN $4::bigint WHEN active_thread_id=$2 THEN active_thread_context_tokens ELSE 0 END,
-    thread_rollover_required=FALSE,thread_contract_version=2,last_scanned_event_sequence=$3,pending_operation_step_id=NULL,updated_at=NOW() WHERE id=$1`,
+    thread_rollover_required=FALSE,thread_contract_version=3,last_scanned_event_sequence=$3,pending_operation_step_id=NULL,updated_at=NOW() WHERE id=$1`,
   [character.id, turn.threadId, sequence, contextTokens]);
   if (!turn.shouldRespond) {
     const sequence = Number((await client.query('SELECT COALESCE(MAX(world_sequence),0) AS sequence FROM scene_entries WHERE scene_id=$1', [state.sceneId])).rows[0].sequence);
@@ -182,7 +182,7 @@ export async function updateDirectorThread(client, projectId, runtime, sequence 
   await client.query(`UPDATE projects SET active_director_thread_id=$2,
     director_thread_turn_count=CASE WHEN active_director_thread_id=$2 THEN director_thread_turn_count+1 ELSE 1 END,
     director_thread_context_tokens=CASE WHEN $4::bigint>0 THEN $4::bigint WHEN active_director_thread_id=$2 THEN director_thread_context_tokens ELSE 0 END,
-    director_thread_rollover_required=FALSE,director_thread_contract_version=2,
+    director_thread_rollover_required=FALSE,director_thread_contract_version=3,
     last_director_event_sequence=COALESCE($3,(SELECT COALESCE(MAX(world_sequence),0) FROM scene_entries WHERE project_id=$1)),updated_at=NOW()
     WHERE id=$1`, [projectId, result.threadId, sequence, contextTokens]);
 }

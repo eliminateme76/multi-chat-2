@@ -1,0 +1,18 @@
+.monitor-topbar .brand small {
+  margin-left: 6px;
+  padding: 2px 5px;
+  border: 1px solid #8977ff88;
+  border-radius: 999px;
+  color: #bdb3ff;
+  font-size: 7px;
+}
+
+.pipeline {
+  grid-template-rows: repeat(3, minmax(58px, 1fr));
+}
+
+.trace-stage.concordia-entity,
+.trace-stage.concordia-game-master {
+  border-color: #8b72d9;
+  background: #2b2248;
+}

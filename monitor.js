@@ -1,5 +1,6 @@
 const stages = [
-  ['state_load', 'DB STATE', '상태 조회'], ['director_plan', 'DIRECTOR', '세계 판정'], ['speaker_select', 'ROUTER', '화자 선택'], ['memory_retrieve', 'MEMORY', '기억 검색'],
+  ['state_load', 'DB STATE', '상태 조회'], ['concordia_game_master', 'CONCORDIA GM', '월드 Entity 판정'], ['speaker_select', 'ROUTER', '화자 선택'], ['memory_retrieve', 'MEMORY', '기억 검색'],
+  ['concordia_entity', 'CONCORDIA', '캐릭터 Entity'],
   ['context_build', 'CONTEXT', '프롬프트 조립'], ['queue_wait', 'QUEUE', '요청 대기'], ['app_server_ready', 'APP SERVER', '프로세스 준비'],
   ['thread_start', 'THREAD', 'Thread 생성'], ['model_generate', 'MODEL', '응답 생성'], ['output_validate', 'VALIDATOR', '출력 검증'], ['db_transaction', 'DATABASE', '상태 저장']
 ];
@@ -20,6 +21,7 @@ const currentRun = () => selectedRuns().find((run) => run.id === selectedRunId) 
 function render() {
   const run = currentRun();
   const appServer = runtime.resources?.appServer || {};
+  const concordiaWorker = runtime.resources?.concordiaWorker || {};
   $('#connection-state').textContent = 'LIVE';
   $('#connection-state').className = 'status-completed';
   $('#run-status').textContent = run ? statusText(run.status) : '대기 중';
@@ -38,6 +40,9 @@ function render() {
   $('#app-server-state').textContent = appServer.status || 'idle';
   $('#app-server-state').className = appServer.status === 'ready' ? 'status-completed' : appServer.status === 'stopped' ? 'status-failed' : 'status-running';
   $('#app-server-detail').textContent = appServer.pid ? `PID ${appServer.pid}` : '';
+  $('#concordia-worker-detail').textContent = concordiaWorker.status
+    ? `Concordia ${concordiaWorker.version || '2.4.0'} · ${concordiaWorker.status}${concordiaWorker.pid ? ` · PID ${concordiaWorker.pid}` : ''}`
+    : 'Concordia worker · 시작 전';
   renderActiveThread();
   renderDirectorPlan();
   renderPipeline(run); renderWaterfall(run, bottleneck); renderHistory(); renderThreads(); renderTraceTimeline();

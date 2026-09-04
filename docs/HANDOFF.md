@@ -1,89 +1,69 @@
-# Sceneweaver handoff
+# Sceneweaver Concordia handoff
 
-Last updated: 2026-09-03 (Asia/Seoul)
+Last updated: 2026-09-04 (Asia/Seoul)
 
 ## Current baseline
 
-- Branch: `main`
-- PostgreSQL is authoritative; character, Director and active World Builder threads are persistent and replaceable.
-- One project is one continuous World. CHAT and STORY Scenes share the same Event history.
-- Application and monitor are expected on ports 3000 and 3001.
+- Branch: `main`; repository: `eliminateme76/multi-chat-2`.
+- This is the Concordia-only comparison fork. The original `multi-chat` repository is not modified by this work.
+- PostgreSQL remains authoritative. Concordia entities/components are reconstructed for each step and Codex threads remain replaceable context.
+- Local defaults are database `sceneweaver_concordia`, application port `3200`, and `gdm-concordia==2.4.0`.
+- No OpenAI API key is used. Node owns the authenticated Codex app-server process under `SCENEWEAVER_CODEX_HOME`.
 
 ## Implemented in this change
 
-- Added `CHARACTER_ATTEMPT` plus an explicit active-character target. Interpersonal offers, requests, touch and conflict now route directly to the target character, who owns acceptance/refusal, without inserting a World Director event.
-- Character prompts include the active participants' routing IDs and public names so structured interaction targets validate without exposing their private state.
-- Kept `WORLD_ATTEMPT` only for environment, chance and world-rule outcomes. Interaction routing replaces the previous responder audit with `CHARACTER_INTERACTION`, remains visible in the monitor, and can chain reciprocal character choices without Director latency.
-- Advanced the authority contract to version `2`, causing version-1 character and Director threads to roll over once on their next use.
-- Added one corrective Director retry when a pending `WORLD_ATTEMPT` is incorrectly answered with `CONTINUE`; Director-stage failures with no character step can now be retried through the existing operation retry endpoint.
-- Reframed the persistent Director as the World's causal resolver rather than a character script writer. Director responder reasons now describe only perception/opportunity, and its structured result evaluates already-established history or a world event instead of prescribing the next character's result.
-- Removed Director-selected success/failure from character prompts and structured output. Characters independently choose acceptance/refusal, speech and action, and classify authority as `NONE`, self-controlled `SELF`, targeted `CHARACTER_ATTEMPT`, or unresolved `WORLD_ATTEMPT`.
-- A `WORLD_ATTEMPT` is persisted without declaring external success, clears any second-responder queue, and forces the World Director to resolve the attempt before another character response. Legacy dramatic-state beat fields remain read-compatible and normalize to world phase/outcome/pressure fields.
-- Added agent authority contract versions so existing character and Director threads roll over once instead of retaining conflicting old instructions.
-- Updated the monitor to label the Director as a world judgment and show the latest established external condition rather than implying that it scripts the character's next result.
-- Added a persistent, sanitized Director-plan audit and a prominent monitor card showing the action, rationale, ordered responders, completed/next/cancelled state, beat, source sequence, and whether the latest operation reused the plan. Raw prompts and private Director context remain unexposed.
-- Reduced progression latency by persisting a Director responder queue for up to two character responses. Each operation now generates one response; the next operation can consume the queued responder without another Director call. New events and non-continue scene signals invalidate the queue.
-- Replaced full character/story snapshots in routine model output with compact validated patches. Before/after character snapshots remain in the audit table, while public Event payloads store only the patch and visible result metadata.
-- Added configurable character/Director thread rollover by turn count and context tokens. Existing threads are marked for one rollover, and successful calls persist turn/token counts transactionally before the old thread is cleaned up.
-- Story model calls now use a neutral `SCENEWEAVER_AGENT_CWD`, preventing repository development instructions from consuming story context. Runtime telemetry records time-to-first-token and token counts, and the monitor shows persistent-thread turn/context usage.
-- The play UI distinguishes World Director judgment from character generation while polling and can refresh after a completed response before operation finalization.
-- Moved live turn execution state out of the top-bar persistence label and into a two-row control beside `다음 턴 진행` / `자동 진행`. It shows the active World Director or character, current-stage elapsed time, total elapsed time after stage changes, and the completed/failed/waiting result duration.
-- Fixed playthrough cloning's ambiguous PostgreSQL parameter cast, which previously made `POST /api/projects/clone` fail before inserting cloned characters.
-- Added world-specific drama intensity and durable story/Scene/character dramatic state.
-- Replaced the browser's random 12-message automatic-event picker with a persistent World Director state: continue, minor event, scene transition, or user-approved major proposal.
-- Major irreversible proposals pause auto-progress and show two or three alternatives plus reject-all. Reversible minor events remain automatic.
-- Director chooses one or two characters with an immediate opportunity to react, separately from Scene participants. It does not choose their behavior. Scene transitions use explicit participant ids and generate the first response in the same operation.
-- Character turns persist bounded current-state snapshots and directed relationship labels/scores. Durable memory requires importance 60+, is deduplicated, capped at twelve active rows, and archived instead of deleted.
-- Added AI-generated legacy-world repair preview/apply/reject. Event history is never rewritten and apply is sequence-checked and transactional.
-- Fixed clean reset/clone playthroughs inherited from pre-story-state worlds being mistaken for legacy history. They now receive a complete initial story/scene state; repair is gated only when empty state and existing events occur together. Migration 015 backfills already-created clean playthroughs.
-- World Builder drafts capture intensity, premise, core tensions and an opening question; new worlds start with populated story, Scene and character state.
-- The play UI shows compact story tension/objective/active tensions and major-decision cards. The monitor records Director world judgment/action and tension movement.
-- Moved `현재 설정으로 새 진행` and destructive `현재 진행 처음부터 다시 시작` out of the world editor into the menu beside the current-project selector. `＋ 새 월드` remains a separate creation action.
-- Added structured story rhythm so Director decisions distinguish build, pressure, choice, consequence and release. Tension direction must match its numeric change, cannot rise three times outside climax, and repeated function/result pairs are rejected.
-- World Director resolutions persist `open/success/qualified_success/setback`; qualified success and setback require a concrete established consequence. Character responses no longer copy a preselected outcome.
-- Transient character generation is retried once. A failed progression can be resumed through `POST /api/operations/:id/retry` without repeating its completed Director event or scene transition.
+- Added a persistent Python JSONL worker in `concordia_runtime/` using real Concordia `EntityAgentWithLogging`, `ContextComponent`, `ActingComponent`, `ActionSpec`, and a bounded custom `Engine`.
+- Added `concordia-client.js`. The worker requests structured model samples through reverse stdio RPC; Node calls the existing Codex app-server and returns the validated result. Python opens no port and receives no auth material.
+- Routed both character progression and World Director progression through the Concordia worker. World Builder, repair and suggestion utilities intentionally remain direct Codex utility calls.
+- Kept one character response maximum per `POST /api/turns` operation.
+- Added a mandatory post-character World GM judgment. The GM may resolve world-only consequences, inject a reversible event, transition a scene, propose a major decision, and schedule the next perceiving responder.
+- Preserved character authority: `CHARACTER_ATTEMPT` forces the targeted active character as the next responder and explicitly forbids the GM prompt from deciding acceptance/refusal. `WORLD_ATTEMPT` is resolved before the same operation completes.
+- Added durable `GM_PENDING` and `GM_COMPLETED` payload checkpoints. Character persistence and `GM_PENDING` commit together; a failed post-GM stage can be retried without duplicating the character Event.
+- Added engine/version metadata to project state, durable operation payload/results, runtime telemetry and the UI badge.
+- Added monitor visibility for the Concordia worker plus character Entity and World GM stages. Worker overhead is recorded separately from nested model duration to avoid timing double-counting.
+- Advanced character/Director prompt contract version to 3; active v2 threads roll over once on next use.
+- Added Python unit tests with a fake reverse model bridge, a worker protocol round trip, and third-party attribution.
 
 ## Database migration
 
-- Latest migration: `db/014_agent_authority_contract.sql`
-- Adds character/Director thread contract versions. Any active thread below the current contract version `2` rolls over on its next call; successful calls persist version `2`.
-- No JSON rewrite is needed; dramatic state normalizes on read and new character Event payloads carry `actionScope`.
+- Latest migration: `db/016_concordia_engine.sql`.
+- Adds `projects.simulation_engine` and `projects.simulation_engine_version`, fixed to `concordia` / `2.4.0` in this fork.
+- Changes new character/Director thread contract defaults to version 3 and marks older active threads for one rollover.
 - `npm run migrate` is safe to rerun.
 
 ## Verification completed
 
-- `npm run check` passed.
-- `npm run migrate` passed.
-- `npm run verify:api` passed against a disposable world using the real Codex app-server. It created a structured world, generated `worldResolution` and independent character `actionScope` output, and preserved model/thread settings.
-- The API verification also confirmed authority contract version persistence, one response per operation, token/counter metadata, and a second response that reused the queued reaction opportunity without a Director call. The latest run took 36.6s for Director+character and 10.0s for the reused character-only operation.
-- After the `CHARACTER_ATTEMPT` change, the final real app-server API run passed in 31.6s for Director+character and 10.5s for the reused character-only operation; the assertion now accepts either a completed queue or a newly chained character-interaction queue.
-- The production story `느리게 도착한 마음` was advanced from turn 43 to 46. A legacy `WORLD_ATTEMPT` was resolved once, then 서윤's question was stored as `CHARACTER_ATTEMPT(target=김재현)` and the next 25.1s operation called 재현 directly with `runtime.director=null`. The resulting dialogue remained coherent, and the monitor's interaction card was visually checked at 1920×1080.
-- This playthrough exposed and verified fixes for two recovery cases: a Director incorrectly returning `CONTINUE` for a pending world attempt, and a character lacking public target IDs. The failed durable operations were retried without duplicating stored events.
-- `npm run verify:latency-logic` passed for compact state patch merging, responder-queue cleaning, and visibility-safe recent context fallback.
-- The real app-server API check also verified that the sanitized Director-plan endpoint reports the generated rationale/order and changes to reused/completed after the second operation. The monitor card was visually checked at 1920×1080 in both empty and populated states.
-- A disposable clone using the production `gpt-5.6-sol` settings completed a fresh Director+character operation in 41.3s and a queued-plan character-only operation in 17.2s. The prior recent progression average was about 73s; this sample improved the full-plan request by 43% and the reused-plan request by 76% (model latency remains variable).
+- `npm run check`: passed, including Node syntax checks, Python compilation and 4 pytest tests.
+- `npm run db:setup`: passed against a new local `sceneweaver_concordia` database.
+- `npm run verify:api`: passed with real Codex app-server calls on the disposable API world. It verified engine/version/checkpoints, one character per operation, mandatory post-GM judgment, contract v3, monitor telemetry, World Builder, settings, reset and clone. The full first operation took 53.7s and the queued-responder operation took 40.2s.
+- Real Codex app-server progression operation `1eb0701f-93e8-4601-9f59-0f28c83b9ab8`: completed in 59.7s. It ran a Concordia GM pre-plan, one character Entity (세라), then a post-character GM judgment; the GM resolved `WORLD_ATTEMPT` as an `INJECT_MINOR_EVENT`/`qualified_success` and persisted `GM_COMPLETED`.
+- Real operation `dabed3b2-332a-4187-900a-e4ade6283716`: completed in 60.7s with one character Event (루카), a same-operation post-GM world consequence, engine metadata, and Director thread resume/reuse.
+- PostgreSQL inspection confirmed project engine `concordia/2.4.0` and successful character/Director thread contract version 3 persistence.
 
-## Operational next checks
+## Known tradeoffs / next checks
 
-1. Observe several real-world progression pairs and compare first-operation (Director + character) versus reused-plan (character only) latency in the monitor.
-2. Exercise a Director-generated major proposal and confirm apply/reject both resume progression.
-3. Test repair and major-decision dialogs on a narrow viewport.
+1. A STORY operation without a reusable reaction opportunity can perform GM pre-selection + character generation + mandatory post-GM judgment. The two real samples were about 60s; most time was Codex generation, not Python overhead (single-digit to low-hundreds of milliseconds after worker startup).
+2. Exercise and visually inspect a `CHARACTER_ATTEMPT` in the browser to confirm the GM observes it while the named target stays next.
+3. Force a post-character GM failure in an automated integration harness and assert retry leaves the character entry count unchanged. The database checkpoint/retry path is implemented; this failure injection is not yet automated.
+4. Exercise a post-character `PROPOSE_MAJOR` and both apply/reject paths.
+5. Browser auto-progress still stops when the page closes; server-owned job scheduling is deferred.
+6. Memory retrieval remains importance/recency based; semantic retrieval is deferred.
 
-## Known limitations
-
-- Browser auto-progress stops when the page closes; there is no server-owned job scheduler yet.
-- Memory retrieval is importance/recency based, without embeddings.
-- Project deletion and cross-world character import are not implemented.
-
-## Handoff checklist
+## Setup on another computer
 
 ```bash
-git status
+cd /home/codex_home/multi-chat-2
+cp .env.example .env
+python3 -m venv .venv
+.venv/bin/pip install -r requirements-concordia.txt
 npm install
-npm run migrate
+sudo service postgresql start
+sudo -u postgres createdb -O sceneweaver sceneweaver_concordia  # only if absent
+set -a; . ./.env; set +a
+CODEX_HOME="$SCENEWEAVER_CODEX_HOME" codex login status
+npm run db:setup
 npm run check
-npm run verify:api
-git add <intended files>
-git commit -m "perf: reduce progression latency"
-git push origin main
+npm run dev
 ```
+
+Do not copy or commit `.env` or Codex credentials. Log in to the separate app-specific Codex home on the target computer.

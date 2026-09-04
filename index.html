@@ -14,11 +14,12 @@
     <link rel="stylesheet" href="./world-builder.css" />
     <link rel="stylesheet" href="./runtime-settings.css" />
     <link rel="stylesheet" href="./story-dynamics.css" />
+    <link rel="stylesheet" href="./concordia.css" />
   </head>
   <body>
     <main class="app-shell">
       <header class="topbar">
-        <a class="brand" href="#top" aria-label="Sceneweaver 홈"><span class="brand-mark">✦</span><span>SCENEWEAVER</span></a>
+        <a class="brand" href="#top" aria-label="Sceneweaver 홈"><span class="brand-mark">✦</span><span>SCENEWEAVER</span><small class="engine-badge">CONCORDIA 2.4</small></a>
         <div class="world-heading"><label class="eyebrow" for="project-select">현재 세계</label><div class="world-switcher"><select id="project-select" aria-label="세계관 선택"></select><details id="project-actions" class="project-actions"><summary aria-label="현재 프로젝트 관리" title="현재 프로젝트 관리">•••</summary><div class="project-actions-menu"><span>현재 프로젝트</span><button id="clone-playthrough-button" type="button">현재 설정으로 새 진행</button><button id="reset-playthrough-button" class="danger-menu-item" type="button">현재 진행 처음부터 다시 시작</button></div></details><button id="open-world-builder" class="world-create-button" type="button">＋ 새 월드</button></div><h1 id="world-title" class="sr-only">별빛 마도학원</h1></div>
         <div class="top-actions"><span id="save-status" class="save-status">자동 저장됨</span><button id="open-runtime-settings" class="icon-button" type="button" title="AI 스레드 설정" aria-label="AI 스레드 설정">⚙</button><a id="monitor-link" href="./monitor.html" class="icon-button" title="실행 모니터" aria-label="실행 모니터">⌁</a><button id="reset-button" class="icon-button" title="데모 초기화" aria-label="데모 초기화">↺</button></div>
       </header>

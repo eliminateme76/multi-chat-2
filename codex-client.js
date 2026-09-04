@@ -14,7 +14,7 @@ const CHARACTER_THREAD_TURN_LIMIT = Number(process.env.CHARACTER_THREAD_TURN_LIM
 const CHARACTER_THREAD_TOKEN_LIMIT = Number(process.env.CHARACTER_THREAD_TOKEN_LIMIT || 50000);
 const DIRECTOR_THREAD_TURN_LIMIT = Number(process.env.DIRECTOR_THREAD_TURN_LIMIT || 8);
 const DIRECTOR_THREAD_TOKEN_LIMIT = Number(process.env.DIRECTOR_THREAD_TOKEN_LIMIT || 80000);
-const AGENT_AUTHORITY_CONTRACT_VERSION = 2;
+const AGENT_AUTHORITY_CONTRACT_VERSION = 3;
 mkdirSync(AGENT_CWD, { recursive: true, mode: 0o700 });
 
 const shouldRollover = (owner, activeThreadId, turnCount, contextTokens, required) => Boolean(activeThreadId) && (required || Number(turnCount || 0) >= (owner === 'director' ? DIRECTOR_THREAD_TURN_LIMIT : CHARACTER_THREAD_TURN_LIMIT) || Number(contextTokens || 0) >= (owner === 'director' ? DIRECTOR_THREAD_TOKEN_LIMIT : CHARACTER_THREAD_TOKEN_LIMIT));
@@ -405,10 +405,10 @@ function runCodexStructured(options) {
 
 process.once('exit', () => appServer?.destroy());
 
-export function generateCodexTurn(context) {
+export function generateCodexTurn(context, promptOverride = '') {
   updateRunMetadata(context.runId, { activeAgentType: 'character', activeAgentName: context.character.name, activePhase: '캐릭터 응답 생성', activeCharacterId: context.character.id, activeCharacterName: context.character.name, activeThreadId: context.character.activeThreadId || null, activeModel: context.character.effectiveModel || CODEX_MODEL, activeEffort: context.character.effectiveReasoningEffort || 'medium' });
   const contextStage = startStage(context.runId, 'context_build');
-  const prompt = buildCharacterTurnPrompt(context);
+  const prompt = promptOverride || buildCharacterTurnPrompt(context);
   endStage(context.runId, contextStage, { promptChars: prompt.length, publicLogs: Math.min(6, context.state.logs.length), privateMemories: context.memories.length });
   const rollover = shouldRollover('character', context.character.activeThreadId, context.character.activeThreadTurnCount, context.character.activeThreadContextTokens, context.character.threadRolloverRequired || Number(context.character.threadContractVersion || 0) < AGENT_AUTHORITY_CONTRACT_VERSION);
   return runCodexStructured({
@@ -451,9 +451,9 @@ export function generateCodexTurn(context) {
   });
 }
 
-export function generateDirectorProgressionPlan(state, participants, runId, director, correction = '') {
+export function generateDirectorProgressionPlan(state, participants, runId, director, correction = '', promptOverride = '') {
   updateRunMetadata(runId, { activeAgentType: 'director', activeAgentName: '월드 디렉터', activePhase: '세계 상황·결과 판정', activeThreadId: director.activeThreadId || null, activeModel: director.model || CODEX_MODEL, activeEffort: director.reasoningEffort || 'high' });
-  const prompt = buildDirectorProgressionPrompt(state, participants, correction);
+  const prompt = promptOverride || buildDirectorProgressionPrompt(state, participants, correction);
   return runCodexStructured({ prompt, outputSchema: directorProgressionSchema, label: 'World Director · 세계 판정', runId,
     thread: directorThreadOptions(director),
     validate: (result) => {
