@@ -20,6 +20,7 @@ Last updated: 2026-09-04 (Asia/Seoul)
 
 ## Implemented in this change
 
+- Improved long-form story readability with Noto Sans KR for content, larger and darker dialogue, non-italic action text, higher-contrast Director events, and clearer state/sidebar copy. This is presentation-only and does not alter Concordia progression or the preserved 50-turn comparison world.
 - Added a persistent Python JSONL worker in `concordia_runtime/` using real Concordia `EntityAgentWithLogging`, `ContextComponent`, `ActingComponent`, `ActionSpec`, and a bounded custom `Engine`.
 - Added `concordia-client.js`. The worker requests structured model samples through reverse stdio RPC; Node calls the existing Codex app-server and returns the validated result. Python opens no port and receives no auth material.
 - Routed both character progression and World Director progression through the Concordia worker. World Builder, repair and suggestion utilities intentionally remain direct Codex utility calls.
@@ -41,6 +42,7 @@ Last updated: 2026-09-04 (Asia/Seoul)
 
 ## Verification completed
 
+- `npm run check` passed after the readability-only UI change. The shared story layout was visually checked at 1920×1080 in headless Chrome against the preserved comparison run.
 - `npm run check`: passed, including Node syntax checks, Python compilation and 4 pytest tests.
 - 2026-09-04 dedicated-home cutover: `npm run migrate`, `npm run check`, and `npm run verify:latency-logic` passed; `CODEX_HOME="$SCENEWEAVER_CODEX_HOME" codex login status` reported `Logged in using ChatGPT`.
 - After restart, `GET /api/state` returned `concordia/2.4.0`, turn 0 and the three initial demo logs. `GET /api/runtime/snapshot` returned a healthy runtime, and `GET /api/models` started the app-server under the dedicated home and returned seven models.
