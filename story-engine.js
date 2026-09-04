@@ -120,7 +120,7 @@ export async function persistGeneratedTurn(client, context, turn) {
   const persistThread = async (sequence) => client.query(`UPDATE characters SET active_thread_id=$2,
     active_thread_turn_count=CASE WHEN active_thread_id=$2 THEN active_thread_turn_count+1 ELSE 1 END,
     active_thread_context_tokens=CASE WHEN $4::bigint>0 THEN $4::bigint WHEN active_thread_id=$2 THEN active_thread_context_tokens ELSE 0 END,
-    thread_rollover_required=FALSE,thread_contract_version=6,last_scanned_event_sequence=$3,pending_operation_step_id=NULL,updated_at=NOW() WHERE id=$1`,
+    thread_rollover_required=FALSE,thread_contract_version=7,last_scanned_event_sequence=$3,pending_operation_step_id=NULL,updated_at=NOW() WHERE id=$1`,
   [character.id, turn.threadId, sequence, contextTokens]);
   if (!turn.shouldRespond) {
     const sequence = Number((await client.query('SELECT COALESCE(MAX(world_sequence),0) AS sequence FROM scene_entries WHERE scene_id=$1', [state.sceneId])).rows[0].sequence);
@@ -182,7 +182,7 @@ export async function updateDirectorThread(client, projectId, runtime, sequence 
   await client.query(`UPDATE projects SET active_director_thread_id=$2,
     director_thread_turn_count=CASE WHEN active_director_thread_id=$2 THEN director_thread_turn_count+1 ELSE 1 END,
     director_thread_context_tokens=CASE WHEN $4::bigint>0 THEN $4::bigint WHEN active_director_thread_id=$2 THEN director_thread_context_tokens ELSE 0 END,
-    director_thread_rollover_required=FALSE,director_thread_contract_version=6,
+    director_thread_rollover_required=FALSE,director_thread_contract_version=7,
     last_director_event_sequence=COALESCE($3,(SELECT COALESCE(MAX(world_sequence),0) FROM scene_entries WHERE project_id=$1)),updated_at=NOW()
     WHERE id=$1`, [projectId, result.threadId, sequence, contextTokens]);
 }

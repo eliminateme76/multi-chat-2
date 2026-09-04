@@ -11,19 +11,41 @@ function publicLog(log, state, includeOutcome = false) {
   return `[${speaker}]\n${content}${outcome}${pendingAttempt}`;
 }
 
-export function buildCharacterTurnPrompt({ character, state, memories = [], visibleEvents = [], recentVisibleEvents = [] }) {
+export function buildCharacterTurnPrompt({ character, state, memories = [], visibleEvents = [], recentVisibleEvents = [] }, { hydration = 'full' } = {}) {
   const relationships = state.relationships.filter((item) => item.from === character.id || item.to === character.id).map((item) => {
     const otherId = item.from === character.id ? item.to : item.from;
     const other = state.characters.find((candidate) => candidate.id === otherId);
     return `${other?.name || '알 수 없는 인물'}: ${item.label}, ${item.score}/100`;
   });
   const memoryText = memories.map((memory) => `- ${memory.memoryText} (당시 감정: ${memory.emotion || '기록 없음'}, 중요도: ${memory.importance})`).join('\n');
-  const publicHistory = (visibleEvents.length ? visibleEvents : recentVisibleEvents).map((log) => publicLog(log, state)).join('\n\n');
+  const publicHistory = (hydration === 'full' ? (visibleEvents.length ? visibleEvents : recentVisibleEvents) : visibleEvents).map((log) => publicLog(log, state)).join('\n\n');
   const activeCharacters = (state.participants || []).map((participant) => state.characters.find((candidate) => candidate.id === participant.characterId)).filter(Boolean).map((candidate) => `${candidate.id} | ${candidate.name}`).join('\n');
 
   const outputStyle = state.presentationMode === 'chat'
     ? `이 장면은 메신저 단체 채팅입니다. 먼저 지금 실제로 답장할 이유가 있는지 판단하세요. 직접 질문받았거나, 감정·목표상 반응이 필요하거나, 새롭고 자연스러운 내용을 보탤 수 있을 때만 shouldRespond=true로 하세요. 같은 동의·조언·확인을 반복할 뿐이면 shouldRespond=false, contentBlocks는 빈 배열, silenceReason에는 비공개 판단 이유를 쓰세요. 답장한다면 contentBlocks에 DIALOGUE 블록 1~2개만 쓰고 소설식 ACTION 블록은 금지합니다.`
     : `shouldRespond=true, silenceReason은 빈 문자열로 작성하세요. contentBlocks에는 DIALOGUE와 ACTION을 실제 발생 순서대로 1~4개 작성하세요. 행동 뒤 대사, 대사 뒤 행동, 행동 사이의 대사 모두 가능하며, 대사는 보통 합계 1~2문장이고 꼭 필요할 때만 3문장, 행동은 각 블록마다 1문장 이내입니다.`;
+  if (hydration === 'delta') return `[THREAD DELTA · CHARACTER]
+이 스레드에 이미 설정된 캐릭터 계약과 권한 규칙을 유지하세요. 아래 PostgreSQL 동기화 정보가 더 최신이며, 기존 문맥과 충돌하면 아래 값을 우선합니다.
+
+- 캐릭터: ${character.id} | ${character.name} | ${character.role}
+- 현재 프로필: 성격 ${character.personality} · 말투 ${character.speechStyle} · 목표 ${character.goal} · 비밀 ${character.secret}
+- 현재 감정/변화 상태: ${character.emotion} · ${JSON.stringify(character.currentState || {})}
+- 현재 관계: ${relationships.join(' | ') || '아직 관계 설정 없음'}
+- 월드/Scene: ${state.world.title} · Scene ${state.sceneNumber || 1} · ${state.world.location} · ${state.world.time} · ${state.world.mood}
+- 현재 상황/요약: ${state.world.description} · ${state.sceneSummary || state.world.description}
+- 현재 공개 초점: ${state.publicDirection || '현재 상황에 자연스럽게 반응하세요.'}
+- 목표/딜레마/세계 결과: ${state.storyStatus?.objective || '현재 상황을 한 단계 움직입니다.'} · ${state.storyStatus?.dilemma || '없음'} · ${state.dramaticState?.worldPressure || '없음'}
+- 활성 참여자 ID와 이름:\n${activeCharacters || `${character.id} | ${character.name}`}
+- 현재 관련 장기 기억:\n${memoryText || '- 아직 저장된 개인 기억이 없습니다.'}
+
+마지막 성공 호출 이후 새로 인지한 사건:
+${publicHistory || '없음'}
+
+이번 턴 지시:
+- ${outputStyle}
+- 새 사건과 현재 핵심 질문·선택·관계 변화 중 한 가지 중심 반응에 집중하고, 비핵심 기술·절차 세부는 압축하세요.
+- 자신의 반응만 결정하세요. 상대의 선택은 CHARACTER_ATTEMPT, 환경·우연·세계 규칙의 결과는 WORLD_ATTEMPT로 남기고 외부 결과를 확정하지 마세요.
+- 상태·기억·관계는 실제 변화만 patch하고, 기존 계약의 JSON schema만 출력하세요.`;
   return `당신은 한국어 이야기 시뮬레이션의 캐릭터 "${character.name}"입니다.
 
 캐릭터 카드와 비공개 정보:
@@ -76,14 +98,38 @@ ${publicHistory || '아직 공개 로그가 없습니다.'}
 15. 출력은 지정된 JSON schema만 만족해야 합니다.`;
 }
 
-export function buildDirectorProgressionPrompt(state, participants, correction = '') {
-  const history = state.logs.slice(-12).map((log) => publicLog(log, state, true)).join('\n\n');
+export function buildDirectorProgressionPrompt(state, participants, correction = '', { hydration = 'full', sinceSequence = 0 } = {}) {
+  const historyLogs = hydration === 'full'
+    ? state.logs.slice(-12)
+    : state.logs.filter((log) => Number(log.worldSequence || 0) > Number(sinceSequence || 0)).slice(-20);
+  const history = historyLogs.map((log) => publicLog(log, state, true)).join('\n\n');
   const intensityRules = {
     gentle: '목표 긴장도 25~50. 내적 갈등, 타이밍, 현실적 제약처럼 되돌릴 수 있는 압력을 사용하세요.',
     balanced: '목표 긴장도 40~70. 장면마다 상충하는 욕구나 실제 대가를 하나 이상 유지하세요.',
     high: '목표 긴장도 60~90. 시간 압박, 관계 역전, 계획 실패를 적극 사용하되 중대 사건은 승인받으세요.'
   };
   const pendingAttempt = [...state.logs].reverse().find((entry) => entry.type === 'message' && entry.payload?.actionScope === 'WORLD_ATTEMPT' && !state.logs.some((later) => Number(later.worldSequence || 0) > Number(entry.worldSequence || 0) && later.type === 'event' && later.actorType === 'DIRECTOR'));
+  if (hydration === 'delta') return `[THREAD DELTA · WORLD DIRECTOR]
+이 스레드에 이미 설정된 World Director의 세계 판정 권한과 이야기 승격 규칙을 유지하세요. 아래 PostgreSQL 동기화 정보가 더 최신이며, 기존 문맥과 충돌하면 아래 값을 우선합니다.
+
+- 월드/강도: ${state.world.title} · ${state.dramaIntensity} (${intensityRules[state.dramaIntensity] || intensityRules.balanced})
+- Scene: ${state.sceneNumber} · ${state.world.location} · ${state.world.time} · ${state.world.mood}
+- 현재 상황/신호: ${state.world.description} · ${state.sceneSignal}
+- 최신 이야기 상태: ${JSON.stringify(state.storyState || {})}
+- 최신 장면 상태: ${JSON.stringify(state.dramaticState || {})}
+- 미판정 WORLD_ATTEMPT: ${pendingAttempt ? `${state.characters.find((item) => item.id === pendingAttempt.characterId)?.name || '캐릭터'} · ${pendingAttempt.action}` : '없음'}
+- 현재 참여자:\n${participants.map((item) => `${item.id} | ${item.name} | ${item.role} | ${item.emotion} | ${JSON.stringify(item.currentState || {})}`).join('\n')}
+
+마지막 성공 판정 이후 새 공개 사건:
+${history || '없음'}
+${correction ? `\n재판정 지시:\n${correction}\n` : ''}
+
+이번 판정 지시:
+- 미판정 WORLD_ATTEMPT가 있으면 세계의 결과를 먼저 확정하고, CHARACTER_ATTEMPT의 수락·거절은 대상 캐릭터에게 남기세요.
+- 새 외부 사실이 필요 없으면 CONTINUE, 되돌릴 수 있는 세계 사건/판정은 INJECT_MINOR_EVENT, 의미 있는 시간·장소·상황 단절은 TRANSITION_SCENE, 비가역 전개는 PROPOSE_MAJOR입니다.
+- 반응자는 상황을 인지하고 지금 반응할 기회가 있는 1~2명만 고르며 행동을 지시하지 마세요.
+- 세계 사실과 이야기 초점을 분리하세요. 핵심 목표·선택·관계·위험·미해결 질문이 변하지 않으면 WORLD_ONLY, 장면 초점은 SCENE, 장기 갈등/핵심 질문은 ARC입니다. 서버 승격 게이트와 기존 rhythm 규칙을 지키세요.
+- 최신 상태 전체를 반복하지 말고 실제 변화만 storyPatch에 넣으며, 기존 계약의 JSON schema만 출력하세요.`;
   return `당신은 한국어 인터랙티브 스토리의 World Director, 즉 세계의 외부 사건·인과관계·행동 결과를 판정하는 실행자입니다. DB 상태가 기준입니다. 캐릭터의 선택을 대신 쓰지 마세요.
 
 - 월드: ${state.world.title}

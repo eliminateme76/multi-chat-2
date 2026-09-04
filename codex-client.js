@@ -14,13 +14,29 @@ const CHARACTER_THREAD_TURN_LIMIT = Number(process.env.CHARACTER_THREAD_TURN_LIM
 const CHARACTER_THREAD_TOKEN_LIMIT = Number(process.env.CHARACTER_THREAD_TOKEN_LIMIT || 50000);
 const DIRECTOR_THREAD_TURN_LIMIT = Number(process.env.DIRECTOR_THREAD_TURN_LIMIT || 8);
 const DIRECTOR_THREAD_TOKEN_LIMIT = Number(process.env.DIRECTOR_THREAD_TOKEN_LIMIT || 80000);
-const AGENT_AUTHORITY_CONTRACT_VERSION = 6;
+const AGENT_AUTHORITY_CONTRACT_VERSION = 7;
 mkdirSync(AGENT_CWD, { recursive: true, mode: 0o700 });
 
 const shouldRollover = (owner, activeThreadId, turnCount, contextTokens, required) => Boolean(activeThreadId) && (required || Number(turnCount || 0) >= (owner === 'director' ? DIRECTOR_THREAD_TURN_LIMIT : CHARACTER_THREAD_TURN_LIMIT) || Number(contextTokens || 0) >= (owner === 'director' ? DIRECTOR_THREAD_TOKEN_LIMIT : CHARACTER_THREAD_TOKEN_LIMIT));
 
-function directorThreadOptions(director) {
+export function characterPromptHydration(character) {
+  const rollover = shouldRollover('character', character.activeThreadId, character.activeThreadTurnCount, character.activeThreadContextTokens, character.threadRolloverRequired || Number(character.threadContractVersion || 0) < AGENT_AUTHORITY_CONTRACT_VERSION);
+  return { mode: !character.activeThreadId || rollover ? 'full' : 'delta', rollover };
+}
+
+export function directorPromptHydration(director) {
   const rollover = shouldRollover('director', director.activeThreadId, director.activeThreadTurnCount, director.activeThreadContextTokens, director.threadRolloverRequired || Number(director.threadContractVersion || 0) < AGENT_AUTHORITY_CONTRACT_VERSION);
+  return { mode: !director.activeThreadId || rollover ? 'full' : 'delta', rollover };
+}
+
+export function resolveThreadPrompt({ reused, prompt, freshPrompt = prompt, promptMode = 'full' }) {
+  return reused
+    ? { prompt, promptMode }
+    : { prompt: freshPrompt, promptMode: 'full' };
+}
+
+function directorThreadOptions(director) {
+  const { rollover } = directorPromptHydration(director);
   return { threadId: rollover ? null : director.activeThreadId, previousThreadId: rollover ? director.activeThreadId : null, rollover, model: director.model || CODEX_MODEL, effort: director.reasoningEffort || 'high', persistent: true };
 }
 
@@ -302,19 +318,22 @@ class PersistentAppServer {
     }
   }
 
-  async runTurn(prompt, outputSchema, runId, { threadId: existingThreadId = null, model = CODEX_MODEL, effort = 'medium', persistent = false, usage = 'Codex 호출', rollover = false } = {}) {
+  async runTurn(prompt, outputSchema, runId, { threadId: existingThreadId = null, model = CODEX_MODEL, effort = 'medium', persistent = false, usage = 'Codex 호출', rollover = false, promptMode = 'full', freshPrompt = prompt } = {}) {
     const ensured = await this.ensureThread(existingThreadId, model, effort, runId, usage);
     const threadId = ensured.threadId;
     if (!threadId) throw new Error('Codex app-server did not return a thread id.');
-    const modelStage = startStage(runId, 'model_generate', { threadId, model, effort, usage });
+    const resolvedPrompt = resolveThreadPrompt({ reused: ensured.reused, prompt, freshPrompt, promptMode });
+    const actualPromptMode = resolvedPrompt.promptMode;
+    const actualPrompt = resolvedPrompt.prompt;
+    const modelStage = startStage(runId, 'model_generate', { threadId, model, effort, usage, promptMode: actualPromptMode, promptChars: actualPrompt.length });
     const completion = new Promise((resolve, reject) => { this.activeTurn = { resolve, reject, threadId, startedAt: Date.now(), firstTokenAt: null }; });
     try {
-      await this.request('turn/start', { threadId, model, effort, cwd: AGENT_CWD, approvalPolicy: 'never', sandbox: 'read-only', input: [{ type: 'text', text: prompt }], outputSchema });
+      await this.request('turn/start', { threadId, model, effort, cwd: AGENT_CWD, approvalPolicy: 'never', sandbox: 'read-only', input: [{ type: 'text', text: actualPrompt }], outputSchema });
       const completed = await completion;
       const tokenUsage = this.threadUsage.get(threadId) || null;
       const last = tokenUsage?.last || null;
-      endStage(runId, modelStage, { outputItems: completed.turn?.items?.length || 0, usage, rollover, timeToFirstTokenMs: completed.timeToFirstTokenMs, inputTokens: last?.inputTokens, cachedInputTokens: last?.cachedInputTokens, outputTokens: last?.outputTokens, reasoningOutputTokens: last?.reasoningOutputTokens, contextTokens: last?.inputTokens });
-      return { turn: completed.turn, threadId, reused: ensured.reused, tokenUsage, timeToFirstTokenMs: completed.timeToFirstTokenMs };
+      endStage(runId, modelStage, { outputItems: completed.turn?.items?.length || 0, usage, rollover, promptMode: actualPromptMode, promptChars: actualPrompt.length, timeToFirstTokenMs: completed.timeToFirstTokenMs, inputTokens: last?.inputTokens, cachedInputTokens: last?.cachedInputTokens, outputTokens: last?.outputTokens, reasoningOutputTokens: last?.reasoningOutputTokens, contextTokens: last?.inputTokens });
+      return { turn: completed.turn, threadId, reused: ensured.reused, tokenUsage, timeToFirstTokenMs: completed.timeToFirstTokenMs, promptMode: actualPromptMode, promptCharacters: actualPrompt.length };
     } catch (error) {
       if (this.activeTurn) this.activeTurn = null;
       failStage(runId, modelStage, error);
@@ -391,7 +410,7 @@ async function executeStructured({ prompt, outputSchema, validate, label, runId,
       const result = JSON.parse(text);
       validate(result);
       endStage(runId, validationStage, { responseChars: text?.length || 0 });
-      return { ...result, threadId: turn.threadId, threadReused: turn.reused, threadUsage: turn.tokenUsage, timeToFirstTokenMs: turn.timeToFirstTokenMs, threadRolledOver: Boolean(thread.rollover), previousThreadId: thread.previousThreadId || null };
+      return { ...result, threadId: turn.threadId, threadReused: turn.reused, threadUsage: turn.tokenUsage, timeToFirstTokenMs: turn.timeToFirstTokenMs, promptMode: turn.promptMode, promptCharacters: turn.promptCharacters, threadRolledOver: Boolean(thread.rollover), previousThreadId: thread.previousThreadId || null };
     } catch (error) { failStage(runId, validationStage, error); throw error; }
   } catch (error) {
     if (appServerStage) failStage(runId, appServerStage, error);
@@ -414,15 +433,16 @@ function runCodexStructured(options) {
 
 process.once('exit', () => appServer?.destroy());
 
-export function generateCodexTurn(context, promptOverride = '') {
+export function generateCodexTurn(context, promptOverride = '', freshPromptOverride = '') {
   updateRunMetadata(context.runId, { activeAgentType: 'character', activeAgentName: context.character.name, activePhase: '캐릭터 응답 생성', activeCharacterId: context.character.id, activeCharacterName: context.character.name, activeThreadId: context.character.activeThreadId || null, activeModel: context.character.effectiveModel || CODEX_MODEL, activeEffort: context.character.effectiveReasoningEffort || 'medium' });
   const contextStage = startStage(context.runId, 'context_build');
-  const prompt = promptOverride || buildCharacterTurnPrompt(context);
-  endStage(context.runId, contextStage, { promptChars: prompt.length, publicLogs: Math.min(6, context.state.logs.length), privateMemories: context.memories.length });
-  const rollover = shouldRollover('character', context.character.activeThreadId, context.character.activeThreadTurnCount, context.character.activeThreadContextTokens, context.character.threadRolloverRequired || Number(context.character.threadContractVersion || 0) < AGENT_AUTHORITY_CONTRACT_VERSION);
+  const { mode: promptMode, rollover } = characterPromptHydration(context.character);
+  const prompt = promptOverride || buildCharacterTurnPrompt(context, { hydration: promptMode });
+  const freshPrompt = freshPromptOverride || (promptMode === 'full' ? prompt : buildCharacterTurnPrompt(context, { hydration: 'full' }));
+  endStage(context.runId, contextStage, { promptMode, promptChars: prompt.length, fullPromptChars: freshPrompt.length, publicLogs: promptMode === 'full' ? Math.min(6, context.state.logs.length) : (context.visibleEvents || []).length, privateMemories: context.memories.length });
   return runCodexStructured({
     prompt, outputSchema: turnSchema, label: `캐릭터 응답 · ${context.character.name}`, runId: context.runId,
-    thread: { threadId: rollover ? null : context.character.activeThreadId, previousThreadId: rollover ? context.character.activeThreadId : null, rollover, model: context.character.effectiveModel || CODEX_MODEL, effort: context.character.effectiveReasoningEffort || 'medium', persistent: true },
+    thread: { threadId: rollover ? null : context.character.activeThreadId, previousThreadId: rollover ? context.character.activeThreadId : null, rollover, promptMode, freshPrompt, model: context.character.effectiveModel || CODEX_MODEL, effort: context.character.effectiveReasoningEffort || 'medium', persistent: true },
     validate: (result) => {
       if (typeof result.shouldRespond !== 'boolean' || typeof result.silenceReason !== 'string') throw new Error('invalid response decision');
       if (typeof result.emotion !== 'string' || !result.emotion.trim()) throw new Error('missing emotion');
@@ -469,11 +489,13 @@ export function generateCodexTurn(context, promptOverride = '') {
   });
 }
 
-export function generateDirectorProgressionPlan(state, participants, runId, director, correction = '', promptOverride = '') {
+export function generateDirectorProgressionPlan(state, participants, runId, director, correction = '', promptOverride = '', freshPromptOverride = '') {
   updateRunMetadata(runId, { activeAgentType: 'director', activeAgentName: '월드 디렉터', activePhase: '세계 상황·결과 판정', activeThreadId: director.activeThreadId || null, activeModel: director.model || CODEX_MODEL, activeEffort: director.reasoningEffort || 'high' });
-  const prompt = promptOverride || buildDirectorProgressionPrompt(state, participants, correction);
+  const { mode: promptMode } = directorPromptHydration(director);
+  const prompt = promptOverride || buildDirectorProgressionPrompt(state, participants, correction, { hydration: promptMode, sinceSequence: director.lastScannedEventSequence });
+  const freshPrompt = freshPromptOverride || (promptMode === 'full' ? prompt : buildDirectorProgressionPrompt(state, participants, correction, { hydration: 'full' }));
   return runCodexStructured({ prompt, outputSchema: directorProgressionSchema, label: 'World Director · 세계 판정', runId,
-    thread: directorThreadOptions(director),
+    thread: { ...directorThreadOptions(director), promptMode, freshPrompt },
     validate: (result) => {
       if (!DIRECTOR_ACTIONS.has(result.action) || typeof result.rationale !== 'string') throw new Error('invalid Director action');
       const characterIds = state.characters.map((item) => item.id);

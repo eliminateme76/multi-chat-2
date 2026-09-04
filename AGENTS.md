@@ -67,6 +67,7 @@ Browser (index.html + app.js)
 - `POST /api/turns` enqueues one durable progression operation and generates at most one character response.
 - `progression-runner.js` reconstructs Concordia entities from DB state. After every stored character action the Concordia World GM judges world-only consequences and schedules the next responder in the same durable operation.
 - `context-builder.js` builds a bounded prompt from the active character card, related relationships, private memories, scene summary, and only recent **public** logs.
+- New/rolled-over character and progression-GM threads receive a full PostgreSQL hydration prompt. Valid reused/resumed threads receive a compact current-state sync plus only Events after the persisted cursor; if `thread/resume` falls back to a new thread, the pending call automatically switches back to full hydration through the Concordia action wrapper.
 - The character model independently returns ordered dialogue/action blocks plus emotion and classifies resolution authority as self-controlled, targeted at another active character, or requiring a World judgment. Targeted interactions route directly to that character; World attempts route back through the Director. The actor never declares external success or another character's reaction.
 - World causality and narrative attention are separate. GM output classifies a judgment as `WORLD_ONLY`, `SCENE`, or `ARC`; the server records necessary world facts but prevents `WORLD_ONLY` judgments from changing beats, tension, open questions, or Scene focus.
 - Model and reasoning effort are resolved from character override → role default → server fallback and are sent on every `turn/start`; do not make thread history authoritative for runtime configuration.
@@ -86,7 +87,7 @@ Browser (index.html + app.js)
 5. Parse the `turn/completed` notification's final `agentMessage` JSON
 6. Persist the successful character Event, cursor and thread link together
 
-Character and Director threads roll over at configured turn/context-token limits and reconstruct from PostgreSQL. Story calls use `SCENEWEAVER_AGENT_CWD`, a neutral directory outside this repository, so development instructions do not enter story context.
+Character and Director threads roll over at configured turn/context-token limits and reconstruct from PostgreSQL. Model, effort and `outputSchema` are still sent on every `turn/start`; reusable identity/authority instructions are not repeated in routine delta prompts. Story calls use `SCENEWEAVER_AGENT_CWD`, a neutral directory outside this repository, so development instructions do not enter story context.
 
 Persistent story memory belongs in PostgreSQL, not in Codex thread history. See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for boundaries, visibility rules, and the turn lifecycle.
 

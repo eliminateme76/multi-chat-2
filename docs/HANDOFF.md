@@ -20,6 +20,9 @@ Last updated: 2026-09-04 (Asia/Seoul)
 
 ## Implemented in this change
 
+- Split persistent story prompts into full hydration and routine deltas. First-use, contract-rollover and limit-rollover character/World GM threads receive the complete bounded DB context and authority contract; valid reused/resumed threads receive current mutable state plus only Events after their persisted cursor.
+- Kept both modes inside the Concordia component/action-spec envelope and prepared a full wrapped prompt alongside every delta. If a saved Codex thread cannot be resumed, the same pending callback automatically uses full hydration rather than starting a replacement from an unusable standalone delta. Cursors still advance only after the character or GM transaction succeeds.
+- Added privacy-safe `promptMode` and `promptCharacters` telemetry to model stages, Concordia callback runtime and durable progression results. Model, reasoning effort and output schema remain explicit on every turn. Advanced the Concordia story-agent contract to version `7` so existing character and Director threads hydrate once under the new contract.
 - Separated authoritative world facts from narrative attention. Every pre/post Concordia GM judgment now classifies its impact as `WORLD_ONLY`, `SCENE`, or `ARC`; a server-side promotion gate prevents world-only details from changing recent beats, rhythm/tension, active questions/tensions, or the Scene objective.
 - Made GM `recentBeat` nullable instead of forcing every judgment to become a beat. `SCENE` updates only immediate focus plus tension/pacing, while only `ARC` can change long-running tensions, questions, and arc phase.
 - Removed duplicate identity, Scene, world and recent-log text from the Concordia adapter. Each authoritative context is now sent once, and operation results expose pre- and post-character promotion decisions separately.
@@ -46,11 +49,13 @@ Last updated: 2026-09-04 (Asia/Seoul)
 - Latest migration: `db/016_concordia_engine.sql`.
 - Adds `projects.simulation_engine` and `projects.simulation_engine_version`, fixed to `concordia` / `2.4.0` in this fork.
 - Changes new character/Director thread contract defaults to version 3 and marks older active threads for one rollover.
-- Runtime code now persists contract version 6 after successful story calls. No new migration is required because narrative promotion, ordered blocks, and portable-world import use existing JSONB/relational columns and HTTP JSON.
+- Runtime code now persists contract version 7 after successful story calls. No new migration is required because full/delta prompting reuses existing Event cursors and JSONB operation results.
 - `npm run migrate` is safe to rerun.
 
 ## Verification completed
 
+- `npm run check` passed, including all 4 Concordia tests; `npm run verify:latency-logic` passed for cursor-filtered character/GM deltas, smaller prompt assertions, and the resume-fallback full-hydration selector.
+- `npm run verify:api` passed against the real Codex app-server and Concordia worker with contract version `7`. It verified first-character `full` hydration, same-character `delta` reuse with a smaller prompt, and a reused post-character GM delta; sampled operations took 57.6s and 26.3s (first GM delta 3,147 characters, first character full 3,274 characters).
 - `npm run check` passed, including all 4 Concordia tests; `npm run verify:latency-logic` passed for all three promotion gates and the world-only no-op invariant.
 - `npm run verify:api` passed against the real app-server and Concordia worker with contract version `6`, separately exposed pre/post promotion decisions, one response per operation, and the post-GM checkpoint; sampled operations took 55.3s and 30.2s.
 - `npm run check` passed, including Node syntax checks, Python compilation and all 4 Concordia tests; `npm run verify:latency-logic` also passed with the natural-dialogue contract checks.
@@ -69,7 +74,7 @@ Last updated: 2026-09-04 (Asia/Seoul)
 
 ## Known tradeoffs / next checks
 
-1. A STORY operation without a reusable reaction opportunity can perform GM pre-selection + character generation + mandatory post-GM judgment. The two real samples were about 60s; most time was Codex generation, not Python overhead (single-digit to low-hundreds of milliseconds after worker startup).
+1. A STORY operation without a reusable reaction opportunity can perform GM pre-selection + character generation + mandatory post-GM judgment. Compare `full` versus `delta` prompt size, time-to-first-token and total latency over several real turns; current input-token telemetry is total thread context, not just the latest prompt.
 2. Exercise and visually inspect a `CHARACTER_ATTEMPT` in the browser to confirm the GM observes it while the named target stays next.
 3. Force a post-character GM failure in an automated integration harness and assert retry leaves the character entry count unchanged. The database checkpoint/retry path is implemented; this failure injection is not yet automated.
 4. Exercise a post-character `PROPOSE_MAJOR` and both apply/reject paths.

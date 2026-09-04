@@ -2,10 +2,11 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildCharacterTurnPrompt, buildDirectorProgressionPrompt } from './context-builder.js';
-import { generateCodexTurn, generateDirectorProgressionPlan } from './codex-client.js';
+import { characterPromptHydration, directorPromptHydration, generateCodexTurn, generateDirectorProgressionPlan } from './codex-client.js';
 import { recordStage, setRuntimeResource, updateRunMetadata } from './runtime-telemetry.js';
 
 const ENGINE = Object.freeze({ name: 'concordia', version: '2.4.0' });
+const wrapConcordiaPrompt = (heading, prompt, actionSpec) => `[${heading}]\n${prompt}\n\n[CONCORDIA ACTION SPEC]\n${actionSpec}`;
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PYTHON = process.env.CONCORDIA_PYTHON?.trim() || path.join(ROOT, '.venv', 'bin', 'python');
 const TIMEOUT_MS = Number(process.env.CONCORDIA_WORKER_TIMEOUT_MS || 180000);
@@ -18,6 +19,8 @@ const runtimeFields = (value) => ({
   threadReused: value.threadReused,
   threadUsage: value.threadUsage,
   timeToFirstTokenMs: value.timeToFirstTokenMs,
+  promptMode: value.promptMode,
+  promptCharacters: value.promptCharacters,
   threadRolledOver: value.threadRolledOver,
   previousThreadId: value.previousThreadId
 });
@@ -128,7 +131,9 @@ function invokeWorker(method, params, modelCallback, runId, stageName) {
 }
 
 export async function generateConcordiaTurn(context) {
-  const modelPrompt = buildCharacterTurnPrompt(context);
+  const { mode: promptMode } = characterPromptHydration(context.character);
+  const modelPrompt = buildCharacterTurnPrompt(context, { hydration: promptMode });
+  const freshModelPrompt = promptMode === 'full' ? modelPrompt : buildCharacterTurnPrompt(context, { hydration: 'full' });
   updateRunMetadata(context.runId, { simulationEngine: ENGINE.name, simulationEngineVersion: ENGINE.version, activePhase: 'Concordia 캐릭터 판단' });
   const result = await invokeWorker('entity/act', {
     name: context.character.name,
@@ -138,14 +143,17 @@ export async function generateConcordiaTurn(context) {
     },
     modelRequest: { kind: 'character' }
   }, async ({ prompt }) => {
-    const value = await generateCodexTurn(context, prompt);
+    const freshPrompt = promptMode === 'full' ? prompt : wrapConcordiaPrompt('authoritative DB context', freshModelPrompt, 'DB 상태와 관찰 가능한 사건만 근거로 이 캐릭터의 다음 반응을 구조화해 결정하세요.');
+    const value = await generateCodexTurn(context, prompt, freshPrompt);
     return { value, runtime: runtimeFields(value) };
   }, context.runId, 'concordia_entity');
   return { ...result.value, engine: result.engine, concordia: result.concordia };
 }
 
 export async function generateConcordiaDirectorPlan(state, participants, runId, director, correction = '') {
-  const modelPrompt = buildDirectorProgressionPrompt(state, participants, correction);
+  const { mode: promptMode } = directorPromptHydration(director);
+  const modelPrompt = buildDirectorProgressionPrompt(state, participants, correction, { hydration: promptMode, sinceSequence: director.lastScannedEventSequence });
+  const freshModelPrompt = promptMode === 'full' ? modelPrompt : buildDirectorProgressionPrompt(state, participants, correction, { hydration: 'full' });
   updateRunMetadata(runId, { simulationEngine: ENGINE.name, simulationEngineVersion: ENGINE.version, activePhase: 'Concordia 월드 판정' });
   const result = await invokeWorker('gm/judge', {
     components: {
@@ -154,7 +162,8 @@ export async function generateConcordiaDirectorPlan(state, participants, runId, 
     observations: [],
     modelRequest: { kind: 'game_master' }
   }, async ({ prompt }) => {
-    const value = await generateDirectorProgressionPlan(state, participants, runId, director, correction, prompt);
+    const freshPrompt = promptMode === 'full' ? prompt : wrapConcordiaPrompt('authoritative DB world state', freshModelPrompt, '세계의 현재 상태와 방금 행동을 판정하고, 다음 세계 진행 결정을 구조화해 반환하세요.');
+    const value = await generateDirectorProgressionPlan(state, participants, runId, director, correction, prompt, freshPrompt);
     return { value, runtime: runtimeFields(value) };
   }, runId, 'concordia_game_master');
   return { ...result.value, engine: result.engine, concordia: result.concordia };

@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict';
 import { buildCharacterTurnPrompt, buildDirectorProgressionPrompt } from '../context-builder.js';
+import { resolveThreadPrompt } from '../codex-client.js';
 import { applyCharacterStatePatch, applyStoryStatePatch, cleanDramaticState, findPendingWorldAttempt, gateNarrativePatch, routeCharacterInteraction } from '../story-dynamics.js';
 
 const ids = ['character-a', 'character-b', 'character-c'];
+
+assert.deepEqual(resolveThreadPrompt({ reused: true, prompt: 'delta', freshPrompt: 'full', promptMode: 'delta' }), { prompt: 'delta', promptMode: 'delta' });
+assert.deepEqual(resolveThreadPrompt({ reused: false, prompt: 'delta', freshPrompt: 'full', promptMode: 'delta' }), { prompt: 'full', promptMode: 'full' });
 
 const characterState = applyCharacterStatePatch({
   currentGoal: '열쇠를 찾는다', internalConflict: '친구를 믿어도 될지 망설인다',
@@ -81,6 +85,19 @@ assert.match(prompt, /CHARACTER_ATTEMPT/);
 assert.match(prompt, /character-b \| 나래/);
 assert.doesNotMatch(prompt, /요구되는 결과/);
 
+const deltaPrompt = buildCharacterTurnPrompt({
+  character: { id: ids[0], name: '가람', role: '탐정', gender: '여성', personality: '신중함', speechStyle: '짧은 존댓말', goal: '진실 찾기', secret: '없음', emotion: '긴장', currentState: { currentGoal: '나래의 답을 듣는다' } },
+  state: { world: { title: '시험 세계', location: '서재', time: '밤', mood: '긴장', description: '나래가 창가에 서 있다.', rules: '문은 밤에 잠긴다.' }, sceneNumber: 1, sceneSummary: '창문이 열렸다.', publicDirection: '나래의 답을 기다린다.', presentationMode: 'scene', storyStatus: { objective: '나래의 선택을 확인한다.', dilemma: '믿을 것인가' }, dramaticState: { worldPressure: '경보가 울릴 수 있다.' }, relationships: [], characters: [{ id: ids[0], name: '가람' }, { id: ids[1], name: '나래' }], participants: [{ characterId: ids[0] }, { characterId: ids[1] }], logs: [] },
+  memories: [],
+  visibleEvents: [{ type: 'event', eventType: '발견', eventText: '새 사건만 전달된다.', worldSequence: 9 }],
+  recentVisibleEvents: [{ type: 'event', eventType: '과거', eventText: '이미 전달된 과거 사건', worldSequence: 3 }]
+}, { hydration: 'delta' });
+assert.match(deltaPrompt, /THREAD DELTA · CHARACTER/);
+assert.match(deltaPrompt, /새 사건만 전달된다/);
+assert.doesNotMatch(deltaPrompt, /이미 전달된 과거 사건/);
+assert.doesNotMatch(deltaPrompt, /급격한 인격 변화나 초기 설정 재작성/);
+assert.ok(deltaPrompt.length < prompt.length, `Character delta prompt was not smaller (${deltaPrompt.length} >= ${prompt.length}).`);
+
 const directorCorrectionPrompt = buildDirectorProgressionPrompt({
   world: { title: '시험 세계', location: '서재', time: '밤', mood: '고요', description: '문을 조사한다.' }, dramaIntensity: 'balanced', sceneNumber: 1, sceneSignal: 'continue',
   storyState: storyState, dramaticState: queue, characters: [{ id: ids[0], name: '가람' }], logs: [], presentationMode: 'scene'
@@ -90,5 +107,18 @@ assert.match(directorCorrectionPrompt, /WORLD_ATTEMPT를 먼저 판정/);
 assert.match(directorCorrectionPrompt, /핵심 질문·선택·관계/);
 assert.match(directorCorrectionPrompt, /WORLD_ONLY/);
 assert.match(directorCorrectionPrompt, /사실이 하나 생긴 것과 이야기의 초점이 변한 것을 분리/);
+
+const directorDeltaPrompt = buildDirectorProgressionPrompt({
+  world: { title: '시험 세계', location: '서재', time: '밤', mood: '고요', description: '문을 조사한다.' }, dramaIntensity: 'balanced', sceneNumber: 1, sceneSignal: 'continue',
+  storyState: storyState, dramaticState: queue, characters: [{ id: ids[0], name: '가람' }], presentationMode: 'scene',
+  logs: [
+    { type: 'event', eventType: '과거', text: '이미 판정한 사건', worldSequence: 4 },
+    { type: 'event', eventType: '발견', text: '새로 판정할 사건', worldSequence: 8 }
+  ]
+}, [{ id: ids[0], name: '가람', role: '탐정', emotion: '집중', currentState: {} }], '', { hydration: 'delta', sinceSequence: 5 });
+assert.match(directorDeltaPrompt, /THREAD DELTA · WORLD DIRECTOR/);
+assert.match(directorDeltaPrompt, /새로 판정할 사건/);
+assert.doesNotMatch(directorDeltaPrompt, /이미 판정한 사건/);
+assert.ok(directorDeltaPrompt.length < directorCorrectionPrompt.length, `Director delta prompt was not smaller (${directorDeltaPrompt.length} >= ${directorCorrectionPrompt.length}).`);
 
 console.log('Latency logic verification passed.');

@@ -125,11 +125,13 @@ try {
   const persistedRuntime = (await pool.query(`SELECT p.director_thread_turn_count AS "directorTurns",p.director_thread_context_tokens AS "directorTokens",p.director_thread_contract_version AS "directorContractVersion",
     c.active_thread_turn_count AS "characterTurns",c.active_thread_context_tokens AS "characterTokens",c.thread_contract_version AS "characterContractVersion"
     FROM projects p JOIN characters c ON c.project_id=p.id AND c.id=$2 WHERE p.id=$1`, [projectId, operation.steps[0].characterId])).rows[0];
-  if (Number(persistedRuntime.directorTurns) < 2 || Number(persistedRuntime.characterTurns) !== 1 || Number(persistedRuntime.directorTokens) <= 0 || Number(persistedRuntime.characterTokens) <= 0 || Number(persistedRuntime.directorContractVersion) !== 6 || Number(persistedRuntime.characterContractVersion) !== 6) throw new Error(`Persistent thread runtime metadata was not stored: ${JSON.stringify(persistedRuntime)}`);
+  if (Number(persistedRuntime.directorTurns) < 2 || Number(persistedRuntime.characterTurns) !== 1 || Number(persistedRuntime.directorTokens) <= 0 || Number(persistedRuntime.characterTokens) <= 0 || Number(persistedRuntime.directorContractVersion) !== 7 || Number(persistedRuntime.characterContractVersion) !== 7) throw new Error(`Persistent thread runtime metadata was not stored: ${JSON.stringify(persistedRuntime)}`);
+  const firstCharacterRuntime = operation.result?.runtime?.characters?.[0];
+  if (firstCharacterRuntime?.promptMode !== 'full' || Number(firstCharacterRuntime.promptCharacters) <= 0) throw new Error(`First Concordia character thread was not fully hydrated: ${JSON.stringify(firstCharacterRuntime)}`);
   const firstPlanView = (await request('/api/runtime/director-plan')).plan;
   if (!firstPlanView?.rationale || !firstPlanView.narrativeImpact || !firstPlanView.responders?.length || firstPlanView.action !== (operation.result.directorPlan?.action || operation.result.directorAction)) throw new Error('Sanitized reaction queue audit is missing.');
-  const queuedCharacterId = afterTurn.participants.find((participant) => participant.characterId !== operation.steps[0].characterId)?.characterId || afterTurn.participants[0].characterId;
-  const reusableState = { ...afterTurn.dramaticState, plannedResponderIds: [queuedCharacterId], planResponderIds: [...new Set([operation.steps[0].characterId, queuedCharacterId])], planStartedSequence: afterTurn.latestSceneSequence, responsesConsumed: 1 };
+  const queuedCharacterId = operation.steps[0].characterId;
+  const reusableState = { ...afterTurn.dramaticState, plannedResponderIds: [queuedCharacterId], planResponderIds: [queuedCharacterId], planStartedSequence: afterTurn.latestSceneSequence, responsesConsumed: 1 };
   await pool.query(`UPDATE scenes SET dramatic_state=$2,progress_signal='continue' WHERE id=$1`, [afterTurn.sceneId, JSON.stringify(reusableState)]);
   const queuedReuse = await request('/api/turns', { method: 'POST' });
   let reusedOperation;
@@ -139,6 +141,9 @@ try {
     await sleep(500);
   }
   if (reusedOperation?.status !== 'COMPLETED' || !reusedOperation.result?.planReused || !reusedOperation.result?.runtime?.director || reusedOperation.payload?.concordiaStage !== 'GM_COMPLETED' || reusedOperation.steps?.length !== 1) throw new Error(`Reusable Director plan plus mandatory post-GM validation failed: ${reusedOperation?.error || reusedOperation?.status}`);
+  const deltaCharacterRuntime = reusedOperation.result?.runtime?.characters?.[0];
+  if (deltaCharacterRuntime?.promptMode !== 'delta' || Number(deltaCharacterRuntime.promptCharacters) <= 0 || Number(deltaCharacterRuntime.promptCharacters) >= Number(firstCharacterRuntime.promptCharacters)) throw new Error(`Reused Concordia character thread did not receive a smaller delta prompt: ${JSON.stringify(deltaCharacterRuntime)}`);
+  if (reusedOperation.result.runtime.director.promptMode !== 'delta') throw new Error(`Reused Concordia Director thread did not receive a delta prompt: ${JSON.stringify(reusedOperation.result.runtime.director)}`);
   const reusedPlanView = (await request('/api/runtime/director-plan')).plan;
   if (!reusedPlanView?.latestOperation?.reused || !reusedPlanView.responders?.length) throw new Error(`Post-GM reaction queue is not visible in the monitor API: ${JSON.stringify(reusedPlanView)}`);
   const runtimeSnapshot = await request('/api/runtime/snapshot');
