@@ -9,14 +9,19 @@ let runtime = { resources: {}, runs: [] };
 let projects = [];
 let threads = [];
 let directorPlan = null;
+let persistedRuns = [];
 let projectId = new URLSearchParams(location.search).get('project');
 let selectedRunId;
 let selectedStageName;
 const $ = (selector) => document.querySelector(selector);
 const esc = (value) => String(value ?? '').replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
 const ms = (value) => value == null ? '—' : value >= 1000 ? `${(value / 1000).toFixed(2)}s` : `${value}ms`;
-const selectedRuns = () => runtime.runs.filter((run) => !projectId || run.projectId === projectId);
-const currentRun = () => selectedRuns().find((run) => run.id === selectedRunId) || selectedRuns()[0];
+const allRuns = () => {
+  const liveIds = new Set(runtime.runs.map((run) => run.id));
+  return [...runtime.runs, ...persistedRuns.filter((run) => !liveIds.has(run.id))].toSorted((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt));
+};
+const selectedRuns = () => allRuns().filter((run) => !projectId || run.projectId === projectId);
+const currentRun = () => selectedRuns().find((run) => run.status === 'running') || selectedRuns().find((run) => run.id === selectedRunId) || selectedRuns()[0];
 
 function render() {
   const run = currentRun();
@@ -37,8 +42,8 @@ function render() {
   $('#current-stage').className = runningStage ? 'status-running' : run?.status === 'completed' ? 'status-completed' : run?.status === 'failed' ? 'status-failed' : '';
   $('#current-stage-time').textContent = runningStage ? `${ms(Date.now() - Date.parse(runningStage.startedAt))} 진행 중` : run ? `최근 실행 ${new Date(run.startedAt).toLocaleTimeString()}` : '—';
   $('#bottleneck').textContent = bottleneck ? `${labelFor(bottleneck.name)} · ${ms(bottleneck.durationMs)}` : '—';
-  $('#app-server-state').textContent = appServer.status || 'idle';
-  $('#app-server-state').className = appServer.status === 'ready' ? 'status-completed' : appServer.status === 'stopped' ? 'status-failed' : 'status-running';
+  $('#app-server-state').textContent = ({ ready: 'ready', idle: '대기', stopped: '중지' })[appServer.status] || appServer.status || '대기';
+  $('#app-server-state').className = appServer.status === 'ready' ? 'status-completed' : appServer.status === 'stopped' ? 'status-failed' : appServer.status === 'idle' ? '' : 'status-running';
   $('#app-server-detail').textContent = appServer.pid ? `PID ${appServer.pid}` : '';
   $('#concordia-worker-detail').textContent = concordiaWorker.status
     ? `Concordia ${concordiaWorker.version || '2.4.0'} · ${concordiaWorker.status}${concordiaWorker.pid ? ` · PID ${concordiaWorker.pid}` : ''}`
@@ -121,7 +126,7 @@ function renderActiveThread() {
   const stageDuration = stage ? ms(Date.now() - Date.parse(stage.startedAt)) : null;
   const compactId = active.threadId.length > 22 ? `${active.threadId.slice(0, 11)}…${active.threadId.slice(-8)}` : active.threadId;
   banner.dataset.active = 'true';
-  title.textContent = active.kind === 'director' ? '월드 디렉터' : active.kind === 'world_builder' ? '월드 설계자' : `캐릭터 · ${active.name.replace(/^캐릭터 응답 · /, '')}`;
+  title.textContent = active.kind === 'director' ? '월드 디렉터' : active.kind === 'world_builder' ? '월드 설계자' : active.kind === 'character' ? `캐릭터 · ${active.name.replace(/^캐릭터 응답 · /, '')}` : `일회성 작업 · ${active.name}`;
   title.className = 'status-running';
   detail.textContent = `${stage ? `${labelFor(stage.name)} · ${stageDuration} 진행 중` : 'Codex 호출 진행 중'} · ${active.detail || active.model || '기본 모델'}${active.effort ? ` · ${active.effort}` : ''} · ${compactId}`;
 }
@@ -182,14 +187,17 @@ function renderThreads() {
 function observedThreads() {
   const observed = new Map();
   for (const run of selectedRuns()) {
-    for (const stage of run.stages || []) {
-      if (!['thread_start', 'thread_resume'].includes(stage.name) || !stage.metadata?.threadId) continue;
+    for (const stage of [...(run.stages || [])].reverse()) {
+      if (!['thread_start', 'thread_resume', 'model_generate'].includes(stage.name) || !stage.metadata?.threadId) continue;
       if (observed.has(stage.metadata.threadId)) continue;
+      const usage = stage.metadata.usage || '';
+      const kind = usage.startsWith('캐릭터 응답 · ') ? 'character' : usage.includes('월드 설계자') ? 'world_builder' : usage.includes('World Director') || usage.includes('디렉터') ? 'director' : 'transient';
+      const name = kind === 'character' ? usage.replace(/^캐릭터 응답 · /, '') : kind === 'director' ? '월드 디렉터' : kind === 'world_builder' ? '월드 설계자' : usage || 'Codex 호출';
       observed.set(stage.metadata.threadId, {
         threadId: stage.metadata.threadId,
-        kind: stage.metadata.usage?.startsWith('캐릭터 응답 · ') ? 'character' : stage.metadata.usage?.includes('월드 설계자') ? 'world_builder' : stage.metadata.usage?.includes('디렉터') ? 'director' : 'transient',
-        name: stage.metadata.usage?.replace(/^캐릭터 응답 · /, '') || 'Codex 호출',
-        detail: `${stage.name === 'thread_resume' ? '기존 스레드 재개' : '새 스레드'} · ${stage.metadata.model || '기본 모델'}`,
+        kind,
+        name,
+        detail: `${stage.name === 'model_generate' ? `모델 호출${stage.metadata.promptMode ? ` · ${stage.metadata.promptMode}` : ''}` : stage.name === 'thread_resume' ? '기존 스레드 재개' : '새 스레드'} · ${stage.metadata.model || '기본 모델'}`,
         status: run.status === 'running' ? 'running' : run.status === 'failed' ? 'failed' : 'completed'
       });
     }
@@ -239,13 +247,15 @@ function renderTraceChart(runs) {
 
 async function refreshThreads() {
   if (!projectId) return;
-  const [threadResponse, planResponse] = await Promise.all([
+  const [threadResponse, planResponse, historyResponse] = await Promise.all([
     fetch(`/api/runtime/threads?projectId=${encodeURIComponent(projectId)}`),
-    fetch(`/api/runtime/director-plan?projectId=${encodeURIComponent(projectId)}`)
+    fetch(`/api/runtime/director-plan?projectId=${encodeURIComponent(projectId)}`),
+    fetch(`/api/runtime/history?projectId=${encodeURIComponent(projectId)}`)
   ]);
-  if (!threadResponse.ok || !planResponse.ok) throw new Error('런타임 상태를 불러오지 못했습니다.');
+  if (!threadResponse.ok || !planResponse.ok || !historyResponse.ok) throw new Error('런타임 상태를 불러오지 못했습니다.');
   threads = (await threadResponse.json()).threads;
   directorPlan = (await planResponse.json()).plan;
+  persistedRuns = (await historyResponse.json()).runs;
 }
 
 function labelFor(name) { return stages.find(([key]) => key === name)?.[2] || name; }
@@ -267,7 +277,11 @@ async function initialize() {
     const message = JSON.parse(event.data);
     if (message.type === 'run') {
       const index = runtime.runs.findIndex((run) => run.id === message.payload.id);
-      if (index >= 0) runtime.runs[index] = message.payload; else runtime.runs.unshift(message.payload);
+      if (index >= 0) runtime.runs[index] = message.payload;
+      else {
+        runtime.runs.unshift(message.payload);
+        if (message.payload.status === 'running' && message.payload.projectId === projectId) selectedRunId = message.payload.id;
+      }
     } else if (message.type === 'resource') runtime.resources[message.payload.name] = message.payload.value;
     render();
   });

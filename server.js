@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { generateCharacterSuggestion, generateCodexTurn, listCodexModels } from './codex-client.js';
 import { appendSceneEvent, buildTurnContext, getActiveParticipants, getStoryState, persistGeneratedTurn } from './story-engine.js';
-import { endStage, failRun, failStage, finishRun, snapshot, startRun, startStage, subscribe } from './runtime-telemetry.js';
+import { configureRuntimePersistence, endStage, failRun, failStage, finishRun, snapshot, startRun, startStage, subscribe } from './runtime-telemetry.js';
 import { enqueueProgression, getOperation, resumeQueuedOperations, retryProgression } from './progression-runner.js';
 import { applyDirectorEvent, createDirectorSuggestions, listEventSuggestions, rejectMajorSuggestions } from './director-engine.js';
 import { clonePlaythrough, exportWorldPackage, importWorldPackage, resetPlaythrough } from './project-lifecycle.js';
@@ -17,6 +17,14 @@ import { createStoryRepairProposal, decideStoryRepair, getPendingStoryRepair } f
 if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required. Copy .env.example to .env.');
 const { Pool } = pg;
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+configureRuntimePersistence(async (run) => {
+  await pool.query(`INSERT INTO runtime_traces(id,project_id,run_type,status,started_at,ended_at,duration_ms,metadata,stages,updated_at)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW())
+    ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status,ended_at=EXCLUDED.ended_at,duration_ms=EXCLUDED.duration_ms,metadata=EXCLUDED.metadata,stages=EXCLUDED.stages,updated_at=NOW()`,
+  [run.id, run.projectId, run.type, run.status, run.startedAt, run.endedAt, run.durationMs, JSON.stringify(run.metadata || {}), JSON.stringify(run.stages || [])]);
+  await pool.query(`DELETE FROM runtime_traces WHERE project_id=$1 AND id IN (
+    SELECT id FROM runtime_traces WHERE project_id=$1 ORDER BY started_at DESC OFFSET 500)`, [run.projectId]);
+});
 const app = express();
 const port = Number(process.env.PORT || 3000);
 const host = process.env.HOST || '0.0.0.0';
@@ -141,6 +149,13 @@ app.post('/api/world-drafts/:id/cancel', async (req, res, next) => {
 });
 
 app.get('/api/runtime/snapshot', (_req, res) => res.json(snapshot()));
+app.get('/api/runtime/history', async (req, res, next) => {
+  try {
+    const rows = (await pool.query(`SELECT id,project_id AS "projectId",run_type AS type,status,started_at AS "startedAt",ended_at AS "endedAt",duration_ms AS "durationMs",metadata,stages
+      FROM runtime_traces WHERE project_id=$1 ORDER BY started_at DESC LIMIT 200`, [projectIdFrom(req)])).rows;
+    res.json({ runs: rows.map((run) => ({ ...run, durationMs: run.durationMs == null ? null : Number(run.durationMs) })) });
+  } catch (error) { next(error); }
+});
 app.get('/api/runtime/events', (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');

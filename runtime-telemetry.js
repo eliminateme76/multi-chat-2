@@ -4,6 +4,7 @@ const MAX_RUNS = 200;
 const runs = [];
 const listeners = new Set();
 const resources = { appServer: { status: 'idle', pid: null, startedAt: null } };
+let persistCompletedRun = null;
 
 const now = () => new Date().toISOString();
 const duration = (start, end = Date.now()) => Math.max(0, end - start);
@@ -12,6 +13,14 @@ const publish = (type, payload) => {
   for (const listener of listeners) listener(event);
 };
 const findRun = (runId) => runs.find((run) => run.id === runId);
+const persist = (run) => {
+  if (!persistCompletedRun || !run) return;
+  Promise.resolve(persistCompletedRun(publicRun(run))).catch((error) => console.error(`Runtime trace persistence failed: ${error.message}`));
+};
+
+export function configureRuntimePersistence(handler) {
+  persistCompletedRun = typeof handler === 'function' ? handler : null;
+}
 
 export function startRun({ type, projectId, metadata = {} }) {
   const run = { id: randomUUID(), type, projectId, status: 'running', startedAt: now(), startedMs: Date.now(), endedAt: null, durationMs: null, metadata, stages: [] };
@@ -57,6 +66,7 @@ export function finishRun(runId, metadata = {}) {
   if (!run) return;
   run.status = 'completed'; run.endedAt = now(); run.durationMs = duration(run.startedMs); run.metadata = { ...run.metadata, ...metadata };
   publish('run', publicRun(run));
+  persist(run);
 }
 
 export function updateRunMetadata(runId, metadata = {}) {
@@ -71,6 +81,7 @@ export function failRun(runId, error) {
   if (!run) return;
   run.status = 'failed'; run.endedAt = now(); run.durationMs = duration(run.startedMs); run.metadata = { ...run.metadata, error: error.message };
   publish('run', publicRun(run));
+  persist(run);
 }
 
 export function setRuntimeResource(name, value) {

@@ -151,6 +151,13 @@ try {
   const characterGeneration = progressionRun?.stages.find((stage) => stage.name === 'model_generate' && stage.metadata.usage?.startsWith('캐릭터 응답'));
   if (!characterGeneration || characterGeneration.metadata.model !== testModel.id || characterGeneration.metadata.effort !== testEffort) throw new Error('The configured model/effort was not used by the next progression.');
   if (!progressionRun.stages.some((stage) => stage.name === 'concordia_entity') || !progressionRun.stages.some((stage) => stage.name === 'concordia_game_master') || runtimeSnapshot.resources?.concordiaWorker?.version !== '2.4.0') throw new Error('Concordia runtime telemetry is missing.');
+  let persistedTrace;
+  for (let attempt = 0; attempt < 20 && !persistedTrace; attempt += 1) {
+    const history = await request('/api/runtime/history');
+    persistedTrace = history.runs.find((run) => run.metadata?.operationId === queuedReuse.operationId);
+    if (!persistedTrace) await sleep(50);
+  }
+  if (!persistedTrace?.stages?.some((stage) => stage.name === 'model_generate' && stage.metadata?.promptMode === 'delta')) throw new Error('Completed Concordia runtime trace was not persisted with safe prompt telemetry.');
   const settingsWithThreads = await request('/api/runtime/settings');
   const threadIdsBeforeSave = new Map(settingsWithThreads.characters.map((character) => [character.id, character.threadId]));
   const preservePayload = {

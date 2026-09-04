@@ -20,6 +20,8 @@ Last updated: 2026-09-04 (Asia/Seoul)
 
 ## Implemented in this change
 
+- Fixed monitor continuity and live ownership. Sanitized completed/failed traces now persist in PostgreSQL (newest 500 per World, 200 loaded by the monitor), so detailed Concordia charts and history return after a server restart. Live SSE runs override persisted copies with the same id.
+- Made an active `model_generate` stage mark an already-loaded character or World GM thread as running even when no `thread/start`/`thread/resume` stage occurs. New runs automatically take focus over a previously selected historical run; utility calls now say `일회성 작업` instead of being mislabeled as character threads, and an idle app-server is no longer colored as active.
 - Split persistent story prompts into full hydration and routine deltas. First-use, contract-rollover and limit-rollover character/World GM threads receive the complete bounded DB context and authority contract; valid reused/resumed threads receive current mutable state plus only Events after their persisted cursor.
 - Kept both modes inside the Concordia component/action-spec envelope and prepared a full wrapped prompt alongside every delta. If a saved Codex thread cannot be resumed, the same pending callback automatically uses full hydration rather than starting a replacement from an unusable standalone delta. Cursors still advance only after the character or GM transaction succeeds.
 - Added privacy-safe `promptMode` and `promptCharacters` telemetry to model stages, Concordia callback runtime and durable progression results. Model, reasoning effort and output schema remain explicit on every turn. Advanced the Concordia story-agent contract to version `7` so existing character and Director threads hydrate once under the new contract.
@@ -46,7 +48,8 @@ Last updated: 2026-09-04 (Asia/Seoul)
 
 ## Database migration
 
-- Latest migration: `db/016_concordia_engine.sql`.
+- Latest migration: `db/017_runtime_traces.sql`.
+- Migration 017 adds `runtime_traces` for redacted completed/failed monitor history. It cascades with the World and is capped to the newest 500 traces per World by runtime persistence.
 - Adds `projects.simulation_engine` and `projects.simulation_engine_version`, fixed to `concordia` / `2.4.0` in this fork.
 - Changes new character/Director thread contract defaults to version 3 and marks older active threads for one rollover.
 - Runtime code now persists contract version 7 after successful story calls. No new migration is required because full/delta prompting reuses existing Event cursors and JSONB operation results.
@@ -54,6 +57,8 @@ Last updated: 2026-09-04 (Asia/Seoul)
 
 ## Verification completed
 
+- `npm run migrate`, `npm run check` (including all 4 Concordia tests), and the real `npm run verify:api` passed with persisted runtime-history lookup and safe `promptMode` telemetry; sampled operations took 58.7s and 26.8s.
+- The Concordia monitor was visually checked at 1920×1080 during a live model call and after a full Node restart. The live banner showed `일회성 작업 · 캐릭터 추천`, and the completed six-stage trace, chart, waterfall and history were restored from PostgreSQL after restart.
 - `npm run check` passed, including all 4 Concordia tests; `npm run verify:latency-logic` passed for cursor-filtered character/GM deltas, smaller prompt assertions, and the resume-fallback full-hydration selector.
 - `npm run verify:api` passed against the real Codex app-server and Concordia worker with contract version `7`. It verified first-character `full` hydration, same-character `delta` reuse with a smaller prompt, and a reused post-character GM delta; sampled operations took 57.6s and 26.3s (first GM delta 3,147 characters, first character full 3,274 characters).
 - `npm run check` passed, including all 4 Concordia tests; `npm run verify:latency-logic` passed for all three promotion gates and the world-only no-op invariant.
