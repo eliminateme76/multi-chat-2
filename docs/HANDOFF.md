@@ -10,6 +10,14 @@ Last updated: 2026-09-04 (Asia/Seoul)
 - Local defaults are database `sceneweaver_concordia`, application port `3200`, and `gdm-concordia==2.4.0`.
 - No OpenAI API key is used. Node owns the authenticated Codex app-server process under `SCENEWEAVER_CODEX_HOME`.
 
+## Local runtime status
+
+- The ignored local `.env` uses database `sceneweaver_concordia`, `HOST=127.0.0.1`, `PORT=3200`, `SCENEWEAVER_CODEX_HOME=/root/.codex-sceneweaver-concordia`, and `SCENEWEAVER_AGENT_CWD=/root/.codex-sceneweaver-concordia/workspace`.
+- The dedicated Codex home was authenticated independently with ChatGPT on 2026-09-04. No credential or `auth.json` was copied from `/root/.codex-sceneweaver`.
+- The previous `multi-chat-2` server using `/root/.codex-sceneweaver` was identified by its port, process group and working directory, then stopped without affecting other Node processes.
+- The replacement server is running from `/home/codex_home/multi-chat-2` on `127.0.0.1:3200`. A real `model/list` request started its child app-server with `CODEX_HOME=/root/.codex-sceneweaver-concordia` and returned seven models.
+- No Windows `portproxy` or firewall inbound rule was added. Keep the service localhost-only.
+
 ## Implemented in this change
 
 - Added a persistent Python JSONL worker in `concordia_runtime/` using real Concordia `EntityAgentWithLogging`, `ContextComponent`, `ActingComponent`, `ActionSpec`, and a bounded custom `Engine`.
@@ -34,6 +42,8 @@ Last updated: 2026-09-04 (Asia/Seoul)
 ## Verification completed
 
 - `npm run check`: passed, including Node syntax checks, Python compilation and 4 pytest tests.
+- 2026-09-04 dedicated-home cutover: `npm run migrate`, `npm run check`, and `npm run verify:latency-logic` passed; `CODEX_HOME="$SCENEWEAVER_CODEX_HOME" codex login status` reported `Logged in using ChatGPT`.
+- After restart, `GET /api/state` returned `concordia/2.4.0`, turn 0 and the three initial demo logs. `GET /api/runtime/snapshot` returned a healthy runtime, and `GET /api/models` started the app-server under the dedicated home and returned seven models.
 - `npm run db:setup`: passed against a new local `sceneweaver_concordia` database.
 - `npm run verify:api`: passed with real Codex app-server calls on the disposable API world. It verified engine/version/checkpoints, one character per operation, mandatory post-GM judgment, contract v3, monitor telemetry, World Builder, settings, reset and clone. The full first operation took 53.7s and the queued-responder operation took 40.2s.
 - Real Codex app-server progression operation `1eb0701f-93e8-4601-9f59-0f28c83b9ab8`: completed in 59.7s. It ran a Concordia GM pre-plan, one character Entity (세라), then a post-character GM judgment; the GM resolved `WORLD_ATTEMPT` as an `INJECT_MINOR_EVENT`/`qualified_success` and persisted `GM_COMPLETED`.
