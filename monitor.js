@@ -69,7 +69,7 @@ function renderDirectorPlan() {
   else if (reusedNow) { status.textContent = '재사용 중'; status.className = 'reused'; }
   else if (directorPlan.valid) { status.textContent = directorPlan.responsesConsumed ? '재사용 가능' : '응답 대기'; status.className = directorPlan.responsesConsumed ? 'reused' : 'active'; }
   else { status.textContent = '계획 완료'; status.className = 'completed'; }
-  rationale.textContent = directorPlan.rationale;
+  rationale.textContent = directorPlan.narrativeReason ? `${directorPlan.rationale} · 서사 승격 판단: ${directorPlan.narrativeReason}` : directorPlan.rationale;
   world.textContent = directorPlan.worldPressure ? `확정된 세계 조건 · ${directorPlan.worldPressure}` : directorPlan.worldRelief ? `확정된 안도 근거 · ${directorPlan.worldRelief}` : '추가로 확정된 외부 조건 없음';
   const remaining = new Set(directorPlan.remainingResponderIds || []);
   responders.innerHTML = directorPlan.responders.map((responder, index) => {
@@ -79,7 +79,8 @@ function renderDirectorPlan() {
     const state = done ? '완료' : next ? '다음' : cancelled ? '취소' : '대기';
     return `<div class="plan-responder ${done ? 'done' : next ? 'next' : cancelled ? 'cancelled' : ''}"><strong>${esc(responder.name)}</strong><small>${state}</small></div>`;
   }).join('');
-  meta.textContent = `Scene ${directorPlan.sceneNumber} · seq ${directorPlan.planStartedSequence} · 세계 ${directorPlan.worldPhase || '—'}/${directorPlan.worldOutcome || '—'}${directorPlan.latestOperation?.reused ? ' · 최근 판단의 반응 순서 재사용' : ''}`;
+  const impactLabel = ({ WORLD_ONLY: '세계 사실만', SCENE: '장면 초점 반영', ARC: '장기 서사 반영' })[directorPlan.narrativeImpact] || '승격 정보 없음';
+  meta.textContent = `Scene ${directorPlan.sceneNumber} · seq ${directorPlan.planStartedSequence} · ${impactLabel} · 세계 ${directorPlan.worldPhase || '—'}/${directorPlan.worldOutcome || '—'}${directorPlan.latestOperation?.reused ? ' · 최근 판단의 반응 순서 재사용' : ''}`;
 }
 
 function allTrackedThreads() {

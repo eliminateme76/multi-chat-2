@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { buildCharacterTurnPrompt, buildDirectorProgressionPrompt } from '../context-builder.js';
-import { applyCharacterStatePatch, applyStoryStatePatch, cleanDramaticState, findPendingWorldAttempt, routeCharacterInteraction } from '../story-dynamics.js';
+import { applyCharacterStatePatch, applyStoryStatePatch, cleanDramaticState, findPendingWorldAttempt, gateNarrativePatch, routeCharacterInteraction } from '../story-dynamics.js';
 
 const ids = ['character-a', 'character-b', 'character-c'];
 
@@ -16,6 +16,11 @@ assert.equal(characterState.currentGoal, '열쇠를 찾는다');
 assert.equal(characterState.internalConflict, '친구에게 사실을 말할지 망설인다');
 assert.deepEqual(characterState.beliefs, ['경비는 정직하다', '창문은 열려 있다']);
 assert.equal(characterState.lastChangedSequence, 7);
+
+const candidateNarrativePatch = { arcPhase: 'turning', tension: 70, pacing: 'fast', upsertActiveTensions: [{ id: 'detail', summary: '세부 사실', involvedCharacterIds: ids, pressure: 70, introducedAtSequence: 8 }], removeActiveTensionIds: ['old'], upsertOpenQuestions: [], removeOpenQuestionIds: ['question'], recentBeat: { type: 'discovery', summary: '세부 사실을 확인했다.' } };
+assert.deepEqual(gateNarrativePatch(candidateNarrativePatch, 'WORLD_ONLY'), { arcPhase: null, tension: null, pacing: null, upsertActiveTensions: [], removeActiveTensionIds: [], upsertOpenQuestions: [], removeOpenQuestionIds: [], recentBeat: null });
+assert.deepEqual(gateNarrativePatch(candidateNarrativePatch, 'SCENE'), { arcPhase: null, tension: 70, pacing: 'fast', upsertActiveTensions: [], removeActiveTensionIds: [], upsertOpenQuestions: [], removeOpenQuestionIds: [], recentBeat: candidateNarrativePatch.recentBeat });
+assert.equal(gateNarrativePatch(candidateNarrativePatch, 'ARC').arcPhase, 'turning');
 
 const storyState = applyStoryStatePatch({
   arcPhase: 'rising', tension: 55, pacing: 'steady',
@@ -83,5 +88,7 @@ const directorCorrectionPrompt = buildDirectorProgressionPrompt({
 assert.match(directorCorrectionPrompt, /재판정 지시/);
 assert.match(directorCorrectionPrompt, /WORLD_ATTEMPT를 먼저 판정/);
 assert.match(directorCorrectionPrompt, /핵심 질문·선택·관계/);
+assert.match(directorCorrectionPrompt, /WORLD_ONLY/);
+assert.match(directorCorrectionPrompt, /사실이 하나 생긴 것과 이야기의 초점이 변한 것을 분리/);
 
 console.log('Latency logic verification passed.');

@@ -3,7 +3,7 @@ import { mkdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { buildCharacterSuggestionPrompt, buildCharacterTurnPrompt, buildDirectorProgressionPrompt, buildEventSuggestionsPrompt, buildDirectorEventApplyPrompt, buildDirectorSceneTransitionPrompt, buildStoryRepairPrompt, buildWorldDraftPrompt } from './context-builder.js';
-import { BEAT_OUTCOMES, DIRECTOR_ACTIONS, RHYTHM_PHASES, TENSION_DIRECTIONS, advanceRhythmState, applyCharacterStatePatch, applyStoryStatePatch, cleanCharacterState, cleanDramaticState, cleanRhythmState, cleanStoryState, findPendingWorldAttempt, tensionDirection } from './story-dynamics.js';
+import { BEAT_OUTCOMES, DIRECTOR_ACTIONS, NARRATIVE_IMPACTS, RHYTHM_PHASES, TENSION_DIRECTIONS, advanceRhythmState, applyCharacterStatePatch, applyStoryStatePatch, cleanCharacterState, cleanDramaticState, cleanRhythmState, cleanStoryState, findPendingWorldAttempt, gateNarrativePatch, tensionDirection } from './story-dynamics.js';
 import { endStage, failStage, recordStage, setRuntimeResource, startStage, updateRunMetadata } from './runtime-telemetry.js';
 
 const CODEX_MODEL = process.env.CODEX_MODEL || 'gpt-5.6-sol';
@@ -14,7 +14,7 @@ const CHARACTER_THREAD_TURN_LIMIT = Number(process.env.CHARACTER_THREAD_TURN_LIM
 const CHARACTER_THREAD_TOKEN_LIMIT = Number(process.env.CHARACTER_THREAD_TOKEN_LIMIT || 50000);
 const DIRECTOR_THREAD_TURN_LIMIT = Number(process.env.DIRECTOR_THREAD_TURN_LIMIT || 8);
 const DIRECTOR_THREAD_TOKEN_LIMIT = Number(process.env.DIRECTOR_THREAD_TOKEN_LIMIT || 80000);
-const AGENT_AUTHORITY_CONTRACT_VERSION = 5;
+const AGENT_AUTHORITY_CONTRACT_VERSION = 6;
 mkdirSync(AGENT_CWD, { recursive: true, mode: 0o700 });
 
 const shouldRollover = (owner, activeThreadId, turnCount, contextTokens, required) => Boolean(activeThreadId) && (required || Number(turnCount || 0) >= (owner === 'director' ? DIRECTOR_THREAD_TURN_LIMIT : CHARACTER_THREAD_TURN_LIMIT) || Number(contextTokens || 0) >= (owner === 'director' ? DIRECTOR_THREAD_TOKEN_LIMIT : CHARACTER_THREAD_TOKEN_LIMIT));
@@ -101,18 +101,19 @@ const storyPatchSchema = {
     removeActiveTensionIds: { type: 'array', maxItems: 5, items: { type: 'string' } },
     upsertOpenQuestions: { type: 'array', maxItems: 3, items: { type: 'object', properties: { id: { type: 'string' }, text: { type: 'string' }, involvedCharacterIds: { type: 'array', maxItems: 6, items: { type: 'string' } }, urgency: { type: 'integer', minimum: 0, maximum: 100 }, introducedAtSequence: { type: 'integer', minimum: 0 } }, required: ['id','text','involvedCharacterIds','urgency','introducedAtSequence'], additionalProperties: false } },
     removeOpenQuestionIds: { type: 'array', maxItems: 5, items: { type: 'string' } },
-    recentBeat: { type: 'object', properties: { type: { type: 'string', enum: ['connection','conflict','choice','setback','reveal','discovery','transition','reflection'] }, summary: { type: 'string' } }, required: ['type','summary'], additionalProperties: false }
+    recentBeat: { type: ['object','null'], properties: { type: { type: 'string', enum: ['connection','conflict','choice','setback','reveal','discovery','transition','reflection'] }, summary: { type: 'string' } }, required: ['type','summary'], additionalProperties: false }
   }, required: ['arcPhase','tension','pacing','upsertActiveTensions','removeActiveTensionIds','upsertOpenQuestions','removeOpenQuestionIds','recentBeat'], additionalProperties: false
 };
 const directorProgressionSchema = {
   type: 'object', properties: {
     action: { type: 'string', enum: ['CONTINUE','INJECT_MINOR_EVENT','TRANSITION_SCENE','PROPOSE_MAJOR'] }, rationale: { type: 'string' },
+    narrativeImpact: { type: 'string', enum: ['WORLD_ONLY','SCENE','ARC'] }, narrativeReason: { type: 'string' },
     responders: { type: 'array', minItems: 1, maxItems: 2, items: { type: 'object', properties: { characterId: { type: 'string' }, perceptionReason: { type: 'string' } }, required: ['characterId','perceptionReason'], additionalProperties: false } },
     storyPatch: storyPatchSchema, sceneState: dramaticStateSchema, worldResolution: worldResolutionSchema,
     eventPlan: { type: 'object', properties: eventPlanProperties, required: Object.keys(eventPlanProperties), additionalProperties: false },
     nextScene: { type: 'object', properties: { ...eventPlanProperties, participantIds: { type: 'array', maxItems: 6, items: { type: 'string' } } }, required: [...Object.keys(eventPlanProperties),'participantIds'], additionalProperties: false },
     majorProposals: { type: 'array', maxItems: 3, items: { type: 'object', properties: { category: { type: 'string', enum: ['관계','선택','발견','돌발','시간 전환','분위기'] }, text: { type: 'string' }, consequence: { type: 'string' }, time: { type: 'string' } }, required: ['category','text','consequence','time'], additionalProperties: false } }
-  }, required: ['action','rationale','responders','storyPatch','sceneState','worldResolution','eventPlan','nextScene','majorProposals'], additionalProperties: false
+  }, required: ['action','rationale','narrativeImpact','narrativeReason','responders','storyPatch','sceneState','worldResolution','eventPlan','nextScene','majorProposals'], additionalProperties: false
 };
 
 const storyRepairSchema = {
@@ -477,6 +478,11 @@ export function generateDirectorProgressionPlan(state, participants, runId, dire
       if (!DIRECTOR_ACTIONS.has(result.action) || typeof result.rationale !== 'string') throw new Error('invalid Director action');
       const characterIds = state.characters.map((item) => item.id);
       if (!result.storyPatch || typeof result.storyPatch !== 'object') throw new Error('invalid story state patch');
+      if (!NARRATIVE_IMPACTS.has(result.narrativeImpact) || typeof result.narrativeReason !== 'string' || !result.narrativeReason.trim()) throw new Error('invalid narrative impact');
+      result.narrativeReason = result.narrativeReason.trim().slice(0, 300);
+      if (['TRANSITION_SCENE','PROPOSE_MAJOR'].includes(result.action) && result.narrativeImpact === 'WORLD_ONLY') throw new Error('scene transition or major proposal requires narrative impact');
+      result.storyPatch = gateNarrativePatch(result.storyPatch, result.narrativeImpact);
+      if (result.narrativeImpact !== 'WORLD_ONLY' && !result.storyPatch.recentBeat?.summary?.trim()) throw new Error('narrative promotion requires a recent beat');
       result.storyState = applyStoryStatePatch(state.storyState, result.storyPatch, characterIds, state.latestSceneSequence);
       const worldResolution = result.worldResolution;
       if (!RHYTHM_PHASES.has(worldResolution?.phase) || !BEAT_OUTCOMES.has(worldResolution?.outcome) || !TENSION_DIRECTIONS.has(worldResolution?.tensionDirection)) throw new Error('invalid world resolution');
@@ -485,12 +491,14 @@ export function generateDirectorProgressionPlan(state, participants, runId, dire
       if (['qualified_success','setback'].includes(worldResolution.outcome) && !worldResolution.consequence) throw new Error('world resolution requires a concrete consequence');
       if (worldResolution.phase === 'release' && worldResolution.outcome === 'success' && !worldResolution.reliefReason) throw new Error('world release requires a relief reason');
       const actualDirection = tensionDirection(state.storyState.tension, result.storyState.tension);
-      if (actualDirection !== worldResolution.tensionDirection) throw new Error(`tension direction must match numeric change (${actualDirection})`);
+      if (result.narrativeImpact === 'WORLD_ONLY') worldResolution.tensionDirection = 'hold';
+      else if (actualDirection !== worldResolution.tensionDirection) throw new Error(`tension direction must match numeric change (${actualDirection})`);
       const previousRhythm = cleanRhythmState(state.storyState.rhythm, state.storyState.recentBeats);
-      if (previousRhythm.consecutiveRises >= 2 && actualDirection === 'rise' && result.storyState.arcPhase !== 'climax') throw new Error('tension cannot rise three times outside climax');
-      if (previousRhythm.repeatedOutcomeCount >= 2 && previousRhythm.lastOutcome === worldResolution.outcome && previousRhythm.phase === worldResolution.phase) throw new Error('Director repeated the same world function and outcome');
-      result.storyState.rhythm = advanceRhythmState(state.storyState, worldResolution, result.storyState.tension);
-      result.sceneState = cleanDramaticState({ ...result.sceneState, worldPhase: worldResolution.phase, lastWorldOutcome: worldResolution.outcome, worldPressure: worldResolution.consequence, worldRelief: worldResolution.reliefReason }, characterIds, state.dramaticState);
+      if (result.narrativeImpact !== 'WORLD_ONLY' && previousRhythm.consecutiveRises >= 2 && actualDirection === 'rise' && result.storyState.arcPhase !== 'climax') throw new Error('tension cannot rise three times outside climax');
+      if (result.narrativeImpact !== 'WORLD_ONLY' && previousRhythm.repeatedOutcomeCount >= 2 && previousRhythm.lastOutcome === worldResolution.outcome && previousRhythm.phase === worldResolution.phase) throw new Error('Director repeated the same world function and outcome');
+      if (result.narrativeImpact !== 'WORLD_ONLY') result.storyState.rhythm = advanceRhythmState(state.storyState, worldResolution, result.storyState.tension);
+      const narrativeScene = result.narrativeImpact === 'WORLD_ONLY' ? state.dramaticState : result.sceneState;
+      result.sceneState = cleanDramaticState({ ...narrativeScene, worldPhase: worldResolution.phase, lastWorldOutcome: worldResolution.outcome, worldPressure: worldResolution.consequence, worldRelief: worldResolution.reliefReason }, characterIds, state.dramaticState);
       if (!Array.isArray(result.responders) || result.responders.length < 1 || result.responders.length > 2) throw new Error('invalid responders');
       if (result.responders.some((responder) => typeof responder.perceptionReason !== 'string' || !responder.perceptionReason.trim())) throw new Error('responders require perception reasons');
       if (findPendingWorldAttempt(state.logs) && result.action === 'CONTINUE') throw new Error('pending world attempt must be resolved before another character response');

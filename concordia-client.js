@@ -134,9 +134,7 @@ export async function generateConcordiaTurn(context) {
     name: context.character.name,
     premise: `월드 ${context.state.world.title} · 장면 ${context.state.sceneNumber}`,
     components: {
-      'authoritative DB context': modelPrompt,
-      'identity': `${context.character.name} · ${context.character.role} · ${context.character.personality}`,
-      'scene': `${context.state.world.location} · ${context.state.world.time} · ${context.state.world.description}`
+      'authoritative DB context': modelPrompt
     },
     modelRequest: { kind: 'character' }
   }, async ({ prompt }) => {
@@ -151,11 +149,9 @@ export async function generateConcordiaDirectorPlan(state, participants, runId, 
   updateRunMetadata(runId, { simulationEngine: ENGINE.name, simulationEngineVersion: ENGINE.version, activePhase: 'Concordia 월드 판정' });
   const result = await invokeWorker('gm/judge', {
     components: {
-      'authoritative DB world state': modelPrompt,
-      'world': `${state.world.title} · ${state.world.description} · 규칙: ${state.world.rules}`,
-      'scene': `${state.world.location} · ${state.world.time} · ${state.world.description}`
+      'authoritative DB world state': modelPrompt
     },
-    observations: state.logs.slice(-8).map((entry) => `${entry.worldSequence || '?'} · ${entry.type} · ${entry.text || entry.eventText || entry.action || ''}`),
+    observations: [],
     modelRequest: { kind: 'game_master' }
   }, async ({ prompt }) => {
     const value = await generateDirectorProgressionPlan(state, participants, runId, director, correction, prompt);

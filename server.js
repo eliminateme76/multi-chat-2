@@ -266,6 +266,7 @@ app.get('/api/runtime/director-plan', async (req, res, next) => {
     const invalidated = row.sceneSignal !== 'continue' || Number(row.latestEventSequence) > Number(dramatic.planStartedSequence || 0);
     res.json({ plan: {
       sourceOperationId: dramatic.planOperationId || null, action: dramatic.planAction || null, rationale: dramatic.planRationale,
+      narrativeImpact: dramatic.planNarrativeImpact || null, narrativeReason: dramatic.planNarrativeReason || '',
       sceneId: row.sceneId, sceneNumber: row.sceneNumber, planStartedSequence: Number(dramatic.planStartedSequence || 0),
       worldPhase: dramatic.worldPhase || dramatic.beatIntent || null, worldOutcome: dramatic.lastWorldOutcome || dramatic.outcomeConstraint || null,
       worldPressure: dramatic.worldPressure || dramatic.pressureSource || '', worldRelief: dramatic.worldRelief || dramatic.reliefReason || '',

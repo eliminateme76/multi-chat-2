@@ -20,10 +20,13 @@ Last updated: 2026-09-04 (Asia/Seoul)
 
 ## Implemented in this change
 
+- Separated authoritative world facts from narrative attention. Every pre/post Concordia GM judgment now classifies its impact as `WORLD_ONLY`, `SCENE`, or `ARC`; a server-side promotion gate prevents world-only details from changing recent beats, rhythm/tension, active questions/tensions, or the Scene objective.
+- Made GM `recentBeat` nullable instead of forcing every judgment to become a beat. `SCENE` updates only immediate focus plus tension/pacing, while only `ARC` can change long-running tensions, questions, and arc phase.
+- Removed duplicate identity, Scene, world and recent-log text from the Concordia adapter. Each authoritative context is now sent once, and operation results expose pre- and post-character promotion decisions separately.
+- Persisted the sanitized promotion decision/reason with the responder plan and exposed it in the monitor. Advanced the Concordia character/Director contract to version `6` so existing threads roll over once.
 - Added engine-neutral `sceneweaver-world` v1 export/import to the current-project menu. It transfers the initial world, cast, private character profiles, relationships and opening dramatic setup between the original and Concordia repositories, remaps all character ids, and intentionally excludes Events, progressed state, memories, threads, operations, runtime models and engine metadata.
 - Added an explicit privacy confirmation before export because the portable file includes character secrets. Import validates and bounds the package, creates an independent project transactionally, and runs it with Concordia and the destination defaults.
 - Made STORY dialogue less scripted: mutable beliefs/commitments/internal conflict are now explicitly private acting notes, responses normally focus on one central reaction in one or two natural sentences, established Korean speech level/pronouns stay consistent, and occupational metaphors are discouraged unless genuinely natural.
-- Advanced the Concordia character/Director prompt contract to version `5`; older active threads roll over once on their next use so they cannot retain the prior dialogue instruction.
 - Replaced fixed dialogue-then-action output with up to four ordered `DIALOGUE`/`ACTION` blocks throughout the Concordia character path. Blocks survive worker passthrough, validation, PostgreSQL persistence, later-agent context and browser rendering; flattened text columns remain populated for compatibility.
 - Added narrative-salience rules to the Concordia character Entity and World GM prompts. Active questions, choices and relationships take priority, while nonessential regulations, procedures, equipment operation and fine physical traces are omitted or compressed.
 - Improved long-form story readability with Noto Sans KR for content, larger and darker dialogue, non-italic action text, higher-contrast Director events, and clearer state/sidebar copy. This is presentation-only and does not alter Concordia progression or the preserved 50-turn comparison world.
@@ -43,11 +46,13 @@ Last updated: 2026-09-04 (Asia/Seoul)
 - Latest migration: `db/016_concordia_engine.sql`.
 - Adds `projects.simulation_engine` and `projects.simulation_engine_version`, fixed to `concordia` / `2.4.0` in this fork.
 - Changes new character/Director thread contract defaults to version 3 and marks older active threads for one rollover.
-- Runtime code now persists contract version 5 after successful story calls. No new migration is required because ordered blocks and portable-world import use existing JSONB/relational columns and HTTP JSON.
+- Runtime code now persists contract version 6 after successful story calls. No new migration is required because narrative promotion, ordered blocks, and portable-world import use existing JSONB/relational columns and HTTP JSON.
 - `npm run migrate` is safe to rerun.
 
 ## Verification completed
 
+- `npm run check` passed, including all 4 Concordia tests; `npm run verify:latency-logic` passed for all three promotion gates and the world-only no-op invariant.
+- `npm run verify:api` passed against the real app-server and Concordia worker with contract version `6`, separately exposed pre/post promotion decisions, one response per operation, and the post-GM checkpoint; sampled operations took 55.3s and 30.2s.
 - `npm run check` passed, including Node syntax checks, Python compilation and all 4 Concordia tests; `npm run verify:latency-logic` also passed with the natural-dialogue contract checks.
 - `npm run verify:api` passed against the real Codex app-server and Concordia worker after the portability change. A disposable world exported and re-imported with three fresh character ids, no Events or threads, and `concordia/2.4.0` selected by the destination; sampled operations took 58.7s and 37.7s.
 - `npm run check` passed with all 4 Concordia Python tests, and `npm run verify:latency-logic` passed for ordered block context reconstruction, legacy fallback and narrative-salience prompt rules.

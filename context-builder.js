@@ -109,12 +109,14 @@ action 규칙:
 8. 같은 phase와 outcome이 반복되면 다음에는 기능을 바꾸세요. 그렇다고 두 번마다 사건이나 실패를 강제하지 말고, 질문을 닫거나 관점을 바꾸거나 조건부 성공을 사용할 수 있습니다.
 9. qualified_success와 setback에는 세계에서 실제로 확정된 조건·책임·대가를 consequence에 작성하세요. release+success에는 이미 안도해도 되는 근거를 reliefReason에 작성하세요.
 10. 호의나 제안을 수락할지는 상대 캐릭터의 권한입니다. Director가 수락·거절·감정·대사를 지정하지 마세요.
-11. storyPatch에는 실제 변경분만 반환하세요. arcPhase/tension/pacing을 유지하면 null, 삭제할 갈등·질문은 ID 목록, 추가·수정은 upsert 목록에 쓰세요. recentBeat에는 이번 판단을 한 문장으로 요약하세요. 전체 storyState를 반복하지 않습니다.
-12. sceneState는 캐릭터에게 공개 가능한 현재 장면의 목표·대가·열린 딜레마를 완전한 최신 상태로 반환하세요. 특정 캐릭터가 취해야 할 행동을 목표로 쓰지 마세요.
-13. responders의 perceptionReason에는 그 캐릭터가 왜 이 상황을 인지했고 지금 반응할 기회가 있는지만 쓰세요. 무엇을 말하거나 선택해야 하는지는 쓰지 마세요.
-14. eventPlan과 nextScene은 사용하지 않는 action에서도 빈 문자열과 빈 배열로 모든 필드를 채우세요.
-15. 장면의 핵심 질문·선택·관계에 영향을 주지 않는 규정, 행정 절차, 장비 조작, 미세 흔적은 새 사건의 중심으로 확대하지 마세요. 꼭 필요한 인과만 짧고 선명하게 확정하고 이미 충분히 설명된 세부 사항은 반복하지 마세요.
-16. 지정된 JSON schema만 출력하세요.`;
+11. 먼저 세계에서 사실이 하나 생긴 것과 이야기의 초점이 변한 것을 분리하세요. narrativeImpact는 현재 목표·선택·관계·위험·미해결 질문·이후 행동 가능성 중 어느 것도 실질적으로 변하지 않았으면 WORLD_ONLY, 현재 장면의 초점이나 대가가 변했으면 SCENE, 장기 갈등·관계·핵심 질문이 변했으면 ARC입니다. 소재의 종류가 아니라 이야기에서 달라진 결과로 판정하세요.
+12. WORLD_ONLY도 필요한 외부 결과는 eventPlan과 worldResolution으로 사실화할 수 있습니다. 그러나 storyPatch는 전부 무변경 값과 recentBeat=null로 반환하고 sceneState는 현재 값을 그대로 반환하세요. 서버도 이 경우 이야기 상태와 장면 초점 변경을 폐기합니다. TRANSITION_SCENE과 PROPOSE_MAJOR는 WORLD_ONLY일 수 없습니다.
+13. SCENE은 tension·pacing·recentBeat만 storyPatch에서 바꿀 수 있고 sceneState로 현재 초점을 갱신합니다. ARC만 arcPhase·활성 갈등·미해결 질문을 추가·수정·삭제할 수 있습니다. SCENE이나 ARC이면 recentBeat에 무엇이 달라졌는지 한 문장으로 쓰세요. 전체 storyState를 반복하지 않습니다.
+14. sceneState는 캐릭터에게 공개 가능한 현재 장면의 목표·대가·열린 딜레마를 완전한 최신 상태로 반환하세요. 특정 캐릭터가 취해야 할 행동을 목표로 쓰지 마세요.
+15. responders의 perceptionReason에는 그 캐릭터가 왜 이 상황을 인지했고 지금 반응할 기회가 있는지만 쓰세요. 무엇을 말하거나 선택해야 하는지는 쓰지 마세요.
+16. eventPlan과 nextScene은 사용하지 않는 action에서도 빈 문자열과 빈 배열로 모든 필드를 채우세요.
+17. 장면의 핵심 질문·선택·관계에 영향을 주지 않는 규정, 행정 절차, 장비 조작, 미세 흔적은 새 사건의 중심으로 확대하지 마세요. 꼭 필요한 인과만 짧고 선명하게 확정하고 이미 충분히 설명된 세부 사항은 반복하지 마세요.
+18. narrativeReason에는 위 승격 기준에서 실제로 무엇이 변했거나 변하지 않았는지를 한 문장으로 설명하고, 지정된 JSON schema만 출력하세요.`;
 }
 
 export function buildResponderSelectionPrompt({ state, participants, minimum }) {

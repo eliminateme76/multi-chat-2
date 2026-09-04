@@ -6,6 +6,7 @@ export const DIRECTOR_ACTIONS = new Set(['CONTINUE', 'INJECT_MINOR_EVENT', 'TRAN
 export const RHYTHM_PHASES = new Set(['build', 'pressure', 'choice', 'consequence', 'release']);
 export const BEAT_OUTCOMES = new Set(['open', 'success', 'qualified_success', 'setback']);
 export const TENSION_DIRECTIONS = new Set(['rise', 'hold', 'fall']);
+export const NARRATIVE_IMPACTS = new Set(['WORLD_ONLY', 'SCENE', 'ARC']);
 
 const clean = (value, max, fallback = '') => typeof value === 'string' ? value.trim().slice(0, max) : fallback;
 const strings = (value, maxItems, maxLength) => Array.isArray(value) ? value.map((item) => clean(item, maxLength)).filter(Boolean).slice(0, maxItems) : [];
@@ -17,7 +18,7 @@ export function emptyStoryState() {
 }
 
 export function emptyDramaticState() {
-  return { objective: '', stakes: '', dilemma: '', beatType: 'reflection', targetTension: 35, participantIds: [], worldPhase: 'build', lastWorldOutcome: 'open', worldPressure: '', worldRelief: '', plannedResponderIds: [], planResponderIds: [], planStartedSequence: 0, responsesConsumed: 0, planAction: '', planRationale: '', planOperationId: '' };
+  return { objective: '', stakes: '', dilemma: '', beatType: 'reflection', targetTension: 35, participantIds: [], worldPhase: 'build', lastWorldOutcome: 'open', worldPressure: '', worldRelief: '', plannedResponderIds: [], planResponderIds: [], planStartedSequence: 0, responsesConsumed: 0, planAction: '', planRationale: '', planNarrativeImpact: '', planNarrativeReason: '', planOperationId: '' };
 }
 
 export function emptyRhythmState() {
@@ -120,6 +121,18 @@ export function applyStoryStatePatch(current, patch = {}, characterIds = [], bea
   }, characterIds, base);
 }
 
+export function gateNarrativePatch(patch = {}, impact = 'WORLD_ONLY') {
+  const source = patch && typeof patch === 'object' ? patch : {};
+  const base = {
+    arcPhase: null, tension: null, pacing: null,
+    upsertActiveTensions: [], removeActiveTensionIds: [],
+    upsertOpenQuestions: [], removeOpenQuestionIds: [], recentBeat: null
+  };
+  if (impact === 'ARC') return { ...base, ...source };
+  if (impact === 'SCENE') return { ...base, tension: source.tension ?? null, pacing: source.pacing ?? null, recentBeat: source.recentBeat || null };
+  return base;
+}
+
 export function cleanStoryState(value = {}, characterIds = [], fallback = {}) {
   const allowed = new Set(characterIds);
   const source = value && typeof value === 'object' ? value : {};
@@ -175,6 +188,8 @@ export function cleanDramaticState(value = {}, characterIds = [], fallback = {})
     responsesConsumed: integer(source.responsesConsumed, 0, 2, integer(base.responsesConsumed, 0, 2, 0)),
     planAction: clean(source.planAction, 40, clean(base.planAction, 40)),
     planRationale: clean(source.planRationale, 500, clean(base.planRationale, 500)),
+    planNarrativeImpact: NARRATIVE_IMPACTS.has(source.planNarrativeImpact) ? source.planNarrativeImpact : (NARRATIVE_IMPACTS.has(base.planNarrativeImpact) ? base.planNarrativeImpact : ''),
+    planNarrativeReason: clean(source.planNarrativeReason, 300, clean(base.planNarrativeReason, 300)),
     planOperationId: clean(source.planOperationId, 64, clean(base.planOperationId, 64))
   };
 }
