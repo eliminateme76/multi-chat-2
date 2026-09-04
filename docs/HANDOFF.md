@@ -20,6 +20,9 @@ Last updated: 2026-09-04 (Asia/Seoul)
 
 ## Implemented in this change
 
+- Replaced fixed dialogue-then-action output with up to four ordered `DIALOGUE`/`ACTION` blocks throughout the Concordia character path. Blocks survive worker passthrough, validation, PostgreSQL persistence, later-agent context and browser rendering; flattened text columns remain populated for compatibility.
+- Added narrative-salience rules to the Concordia character Entity and World GM prompts. Active questions, choices and relationships take priority, while nonessential regulations, procedures, equipment operation and fine physical traces are omitted or compressed.
+- Advanced the runtime prompt contract to version `4`; active version-3 character and Director threads roll over once on next use.
 - Improved long-form story readability with Noto Sans KR for content, larger and darker dialogue, non-italic action text, higher-contrast Director events, and clearer state/sidebar copy. This is presentation-only and does not alter Concordia progression or the preserved 50-turn comparison world.
 - Added a persistent Python JSONL worker in `concordia_runtime/` using real Concordia `EntityAgentWithLogging`, `ContextComponent`, `ActingComponent`, `ActionSpec`, and a bounded custom `Engine`.
 - Added `concordia-client.js`. The worker requests structured model samples through reverse stdio RPC; Node calls the existing Codex app-server and returns the validated result. Python opens no port and receives no auth material.
@@ -30,7 +33,6 @@ Last updated: 2026-09-04 (Asia/Seoul)
 - Added durable `GM_PENDING` and `GM_COMPLETED` payload checkpoints. Character persistence and `GM_PENDING` commit together; a failed post-GM stage can be retried without duplicating the character Event.
 - Added engine/version metadata to project state, durable operation payload/results, runtime telemetry and the UI badge.
 - Added monitor visibility for the Concordia worker plus character Entity and World GM stages. Worker overhead is recorded separately from nested model duration to avoid timing double-counting.
-- Advanced character/Director prompt contract version to 3; active v2 threads roll over once on next use.
 - Added Python unit tests with a fake reverse model bridge, a worker protocol round trip, and third-party attribution.
 
 ## Database migration
@@ -38,10 +40,14 @@ Last updated: 2026-09-04 (Asia/Seoul)
 - Latest migration: `db/016_concordia_engine.sql`.
 - Adds `projects.simulation_engine` and `projects.simulation_engine_version`, fixed to `concordia` / `2.4.0` in this fork.
 - Changes new character/Director thread contract defaults to version 3 and marks older active threads for one rollover.
+- Runtime code now persists contract version 4 after successful story calls. No new migration is required because ordered blocks use the existing JSONB payload and existing contract columns.
 - `npm run migrate` is safe to rerun.
 
 ## Verification completed
 
+- `npm run check` passed with all 4 Concordia Python tests, and `npm run verify:latency-logic` passed for ordered block context reconstruction, legacy fallback and narrative-salience prompt rules.
+- `npm run verify:api` passed with the real Codex app-server and Concordia worker using `gpt-5.6-luna`/`medium`. It persisted ordered blocks and contract version 4 while preserving the post-character GM checkpoint and reusable responder plan; sampled operations took 42.0s and 35.5s.
+- The localhost-only server on port 3200 was restarted from `/home/codex_home/multi-chat-2`; `/api/state` and the served ordered-block renderer responded successfully after restart.
 - `npm run check` passed after the readability-only UI change. The shared story layout was visually checked at 1920×1080 in headless Chrome against the preserved comparison run.
 - `npm run check`: passed, including Node syntax checks, Python compilation and 4 pytest tests.
 - 2026-09-04 dedicated-home cutover: `npm run migrate`, `npm run check`, and `npm run verify:latency-logic` passed; `CODEX_HOME="$SCENEWEAVER_CODEX_HOME" codex login status` reported `Logged in using ChatGPT`.

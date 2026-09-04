@@ -3,7 +3,12 @@ function publicLog(log, state, includeOutcome = false) {
   const speaker = state.characters.find((item) => item.id === log.characterId)?.name || '알 수 없는 인물';
   const outcome = includeOutcome && log.payload?.beatOutcome ? `\n(과거 형식의 캐릭터 자체 평가: ${log.payload.beatOutcome}${log.payload.conditionOrCost ? ` · 조건/대가: ${log.payload.conditionOrCost}` : ''})` : '';
   const pendingAttempt = includeOutcome && log.payload?.actionScope === 'WORLD_ATTEMPT' ? '\n(외부 결과가 아직 확정되지 않은 행동 시도)' : '';
-  return `[${speaker}] ${log.text}\n(행동: ${log.action})${outcome}${pendingAttempt}`;
+  const storedBlocks = Array.isArray(log.payload?.contentBlocks) ? log.payload.contentBlocks : [];
+  const blocks = storedBlocks.length
+    ? storedBlocks
+    : [{ type: 'DIALOGUE', text: log.text }, { type: 'ACTION', text: log.action }].filter((block) => block.text);
+  const content = blocks.map((block) => `${block.type === 'ACTION' ? '행동' : '대사'}: ${block.text}`).join('\n');
+  return `[${speaker}]\n${content}${outcome}${pendingAttempt}`;
 }
 
 export function buildCharacterTurnPrompt({ character, state, memories = [], visibleEvents = [], recentVisibleEvents = [] }) {
@@ -17,8 +22,8 @@ export function buildCharacterTurnPrompt({ character, state, memories = [], visi
   const activeCharacters = (state.participants || []).map((participant) => state.characters.find((candidate) => candidate.id === participant.characterId)).filter(Boolean).map((candidate) => `${candidate.id} | ${candidate.name}`).join('\n');
 
   const outputStyle = state.presentationMode === 'chat'
-    ? `이 장면은 메신저 단체 채팅입니다. 먼저 지금 실제로 답장할 이유가 있는지 판단하세요. 직접 질문받았거나, 감정·목표상 반응이 필요하거나, 새롭고 자연스러운 내용을 보탤 수 있을 때만 shouldRespond=true로 하세요. 같은 동의·조언·확인을 반복할 뿐이면 shouldRespond=false, dialogue/action은 빈 문자열, silenceReason에는 비공개 판단 이유를 쓰세요. 답장한다면 실제 메시지 1~2개만 쓰고 소설식 지문은 금지하며 action은 빈 문자열입니다.`
-    : `shouldRespond=true, silenceReason은 빈 문자열로 작성하세요. 대사는 1~3문장, 행동은 필요할 때 1문장으로 작성하세요.`;
+    ? `이 장면은 메신저 단체 채팅입니다. 먼저 지금 실제로 답장할 이유가 있는지 판단하세요. 직접 질문받았거나, 감정·목표상 반응이 필요하거나, 새롭고 자연스러운 내용을 보탤 수 있을 때만 shouldRespond=true로 하세요. 같은 동의·조언·확인을 반복할 뿐이면 shouldRespond=false, contentBlocks는 빈 배열, silenceReason에는 비공개 판단 이유를 쓰세요. 답장한다면 contentBlocks에 DIALOGUE 블록 1~2개만 쓰고 소설식 ACTION 블록은 금지합니다.`
+    : `shouldRespond=true, silenceReason은 빈 문자열로 작성하세요. contentBlocks에는 DIALOGUE와 ACTION을 실제 발생 순서대로 1~4개 작성하세요. 행동 뒤 대사, 대사 뒤 행동, 행동 사이의 대사 모두 가능하며, 대사는 합계 1~3문장이고 행동은 각 블록마다 1문장 이내입니다.`;
   return `당신은 한국어 이야기 시뮬레이션의 캐릭터 "${character.name}"입니다.
 
 캐릭터 카드와 비공개 정보:
@@ -58,16 +63,17 @@ ${publicHistory || '아직 공개 로그가 없습니다.'}
 2. 다른 캐릭터의 목표·비밀·기억 또는 비공개 Director 상태를 아는 척하지 마세요.
 3. ${outputStyle}
 4. 무엇을 말하고 무엇을 시도할지는 성격·목표·관계·기억에 따라 독립적으로 결정하세요. 제안의 수락·거절·회피·조건 제시 중 어느 것도 미리 정해져 있지 않습니다.
-5. 자신의 대사, 감정, 의도와 직접 통제 가능한 몸짓은 확정할 수 있지만 타인의 반응, 우연, 환경 변화, 행동의 외부 성공 여부는 확정하지 마세요. actionScope는 행동이나 직접 답변 요구가 없으면 NONE, 자신의 몸짓처럼 결과까지 직접 통제하면 SELF입니다.
-6. 특정 참여자의 수락·거절·대답에 결과가 달린 말이나 행동은 CHARACTER_ATTEMPT로 쓰고 actionTargetId에 그 캐릭터 ID를 정확히 넣으세요. 손 내밀기, 부탁, 설득, 공격처럼 상대가 결정할 일은 세계 판정 대상이 아닙니다. 대상 캐릭터가 다음 턴에 직접 결정합니다.
-7. 환경·우연·세계 규칙에 성공 여부가 달린 시도만 WORLD_ATTEMPT로 쓰고 actionTargetId는 비우세요. 잠긴 문 열기, 단서 찾기, 위험한 도약처럼 세계가 판정할 일입니다. action에는 시도만 쓰고 성공·실패 결과를 쓰지 마세요.
-8. shouldRespond=true일 때 현재 장면을 움직이는 관찰, 질문, 선택 또는 행동을 하나 포함하세요. "다음 장면으로 가자"처럼 메타적인 장면 전환을 제안하지 마세요. 시간·장소 전환과 외부 결과는 World Director만 확정합니다.
-9. statePatch에는 실제로 바뀐 상태만 기록하세요. 목표·내적 갈등을 유지하면 setCurrentGoal/setInternalConflict는 null, 목록 변경이 없으면 각 배열은 비웁니다. 제거 항목은 기존 문자열과 정확히 같아야 합니다. 급격한 인격 변화나 초기 설정 재작성은 금지합니다.
-10. memory는 오래 유지할 가치가 있는 새 사실만 한 문장으로 작성하세요. 단순 감정 반복이나 이미 기억에 있는 내용이면 비우세요. 중요도는 0~100이며 저장할 가치가 충분할 때만 60 이상을 사용하세요.
-11. relationshipChanges에는 이 캐릭터가 상대를 바라보는 관계가 실제로 변한 경우만 -10~10 delta, 변경 뒤 관계 설명 label, 근거 reason을 작성하세요. 상대 캐릭터의 감정이나 관계를 대신 바꾸지 마세요.
-12. sceneSignal은 캐릭터의 관점에서 계속 반응할 것이 있으면 continue, 세계의 개입이 필요하면 stalled, 자신이 보기에 현재 질문이 끝났으면 complete입니다. 이는 Director가 다음 진행에서 검토할 의견이며 장면을 직접 전환하지 않습니다. CHARACTER_ATTEMPT에서는 대상의 결정이 남으므로 반드시 continue입니다.
-13. shouldRespond=false이면 actionScope는 NONE, actionTargetId는 빈 문자열이고 memory는 빈 문자열, memoryImportance는 0, relationshipChanges와 statePatch의 배열은 빈 배열, 두 set 필드는 null, sceneSignal은 continue입니다. CHARACTER_ATTEMPT가 아니어도 actionTargetId는 비웁니다.
-14. 출력은 지정된 JSON schema만 만족해야 합니다.`;
+5. 현재 장면의 핵심 질문·선택·관계 변화에 직접 영향을 주는 말과 행동을 우선하세요. 핵심에 영향을 주지 않는 도구 사용법, 규정, 행정 절차, 미세한 물리 흔적은 생략하거나 짧은 한 구절로 압축하고 새 세부 사항을 연쇄적으로 만들어내지 마세요.
+6. 자신의 대사, 감정, 의도와 직접 통제 가능한 몸짓은 확정할 수 있지만 타인의 반응, 우연, 환경 변화, 행동의 외부 성공 여부는 확정하지 마세요. actionScope는 ACTION 블록이나 직접 답변 요구가 없으면 NONE, 자신의 몸짓처럼 결과까지 직접 통제하면 SELF입니다.
+7. 특정 참여자의 수락·거절·대답에 결과가 달린 말이나 행동은 CHARACTER_ATTEMPT로 쓰고 actionTargetId에 그 캐릭터 ID를 정확히 넣으세요. 손 내밀기, 부탁, 설득, 공격처럼 상대가 결정할 일은 세계 판정 대상이 아닙니다. 대상 캐릭터가 다음 턴에 직접 결정합니다.
+8. 환경·우연·세계 규칙에 성공 여부가 달린 시도만 WORLD_ATTEMPT로 쓰고 actionTargetId는 비우세요. 잠긴 문 열기, 단서 찾기, 위험한 도약처럼 세계가 판정할 일입니다. ACTION 블록에는 시도만 쓰고 성공·실패 결과를 쓰지 마세요.
+9. shouldRespond=true일 때 현재 장면을 움직이는 관찰, 질문, 선택 또는 행동을 하나 포함하세요. "다음 장면으로 가자"처럼 메타적인 장면 전환을 제안하지 마세요. 시간·장소 전환과 외부 결과는 World Director만 확정합니다.
+10. statePatch에는 실제로 바뀐 상태만 기록하세요. 목표·내적 갈등을 유지하면 setCurrentGoal/setInternalConflict는 null, 목록 변경이 없으면 각 배열은 비웁니다. 제거 항목은 기존 문자열과 정확히 같아야 합니다. 급격한 인격 변화나 초기 설정 재작성은 금지합니다.
+11. memory는 오래 유지할 가치가 있는 새 사실만 한 문장으로 작성하세요. 단순 감정 반복이나 이미 기억에 있는 내용이면 비우세요. 중요도는 0~100이며 저장할 가치가 충분할 때만 60 이상을 사용하세요.
+12. relationshipChanges에는 이 캐릭터가 상대를 바라보는 관계가 실제로 변한 경우만 -10~10 delta, 변경 뒤 관계 설명 label, 근거 reason을 작성하세요. 상대 캐릭터의 감정이나 관계를 대신 바꾸지 마세요.
+13. sceneSignal은 캐릭터의 관점에서 계속 반응할 것이 있으면 continue, 세계의 개입이 필요하면 stalled, 자신이 보기에 현재 질문이 끝났으면 complete입니다. 이는 Director가 다음 진행에서 검토할 의견이며 장면을 직접 전환하지 않습니다. CHARACTER_ATTEMPT에서는 대상의 결정이 남으므로 반드시 continue입니다.
+14. shouldRespond=false이면 contentBlocks는 빈 배열, actionScope는 NONE, actionTargetId는 빈 문자열이고 memory는 빈 문자열, memoryImportance는 0, relationshipChanges와 statePatch의 배열은 빈 배열, 두 set 필드는 null, sceneSignal은 continue입니다. CHARACTER_ATTEMPT가 아니어도 actionTargetId는 비웁니다.
+15. 출력은 지정된 JSON schema만 만족해야 합니다.`;
 }
 
 export function buildDirectorProgressionPrompt(state, participants, correction = '') {
@@ -107,7 +113,8 @@ action 규칙:
 12. sceneState는 캐릭터에게 공개 가능한 현재 장면의 목표·대가·열린 딜레마를 완전한 최신 상태로 반환하세요. 특정 캐릭터가 취해야 할 행동을 목표로 쓰지 마세요.
 13. responders의 perceptionReason에는 그 캐릭터가 왜 이 상황을 인지했고 지금 반응할 기회가 있는지만 쓰세요. 무엇을 말하거나 선택해야 하는지는 쓰지 마세요.
 14. eventPlan과 nextScene은 사용하지 않는 action에서도 빈 문자열과 빈 배열로 모든 필드를 채우세요.
-15. 지정된 JSON schema만 출력하세요.`;
+15. 장면의 핵심 질문·선택·관계에 영향을 주지 않는 규정, 행정 절차, 장비 조작, 미세 흔적은 새 사건의 중심으로 확대하지 마세요. 꼭 필요한 인과만 짧고 선명하게 확정하고 이미 충분히 설명된 세부 사항은 반복하지 마세요.
+16. 지정된 JSON schema만 출력하세요.`;
 }
 
 export function buildResponderSelectionPrompt({ state, participants, minimum }) {

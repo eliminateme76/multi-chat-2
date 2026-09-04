@@ -96,10 +96,10 @@ export async function buildCharacterContext(queryable, projectId, characterId, r
   const character = (await getActiveParticipants(queryable, projectId)).find((item) => item.id === characterId);
   if (!character) throw new Error('Responder is not an active scene participant.');
   const memories = (await queryable.query(`SELECT id,memory_text AS "memoryText",emotion,importance FROM character_memories WHERE project_id=$1 AND character_id=$2 AND archived_at IS NULL ORDER BY importance DESC,created_at DESC LIMIT 6`, [projectId, characterId])).rows;
-  const visibleEvents = (await queryable.query(`SELECT e.id,e.entry_type AS type,e.character_id AS "characterId",e.dialogue AS text,e.action,e.event_text AS "eventText",e.event_type AS "eventType",e.sort_order AS "sortOrder",e.world_sequence AS "worldSequence",s.scene_number AS "sceneNumber"
+  const visibleEvents = (await queryable.query(`SELECT e.id,e.entry_type AS type,e.character_id AS "characterId",e.dialogue AS text,e.action,e.event_text AS "eventText",e.event_type AS "eventType",e.sort_order AS "sortOrder",e.world_sequence AS "worldSequence",e.payload,s.scene_number AS "sceneNumber"
     FROM scene_entries e JOIN scenes s ON s.id=e.scene_id JOIN scene_entry_recipients r ON r.entry_id=e.id
     WHERE e.project_id=$1 AND r.character_id=$2 AND e.world_sequence>COALESCE($3,0) ORDER BY e.world_sequence LIMIT 40`, [projectId, characterId, character.lastScannedEventSequence])).rows;
-  const recentVisibleEvents = (await queryable.query(`SELECT e.id,e.entry_type AS type,e.character_id AS "characterId",e.dialogue AS text,e.action,e.event_text AS "eventText",e.event_type AS "eventType",e.sort_order AS "sortOrder",e.world_sequence AS "worldSequence",s.scene_number AS "sceneNumber"
+  const recentVisibleEvents = (await queryable.query(`SELECT e.id,e.entry_type AS type,e.character_id AS "characterId",e.dialogue AS text,e.action,e.event_text AS "eventText",e.event_type AS "eventType",e.sort_order AS "sortOrder",e.world_sequence AS "worldSequence",e.payload,s.scene_number AS "sceneNumber"
     FROM scene_entries e JOIN scenes s ON s.id=e.scene_id JOIN scene_entry_recipients r ON r.entry_id=e.id
     WHERE e.project_id=$1 AND r.character_id=$2 ORDER BY e.world_sequence DESC LIMIT 6`, [projectId, characterId])).rows.reverse();
   return { state, character, memories, visibleEvents, recentVisibleEvents, runId };
@@ -120,7 +120,7 @@ export async function persistGeneratedTurn(client, context, turn) {
   const persistThread = async (sequence) => client.query(`UPDATE characters SET active_thread_id=$2,
     active_thread_turn_count=CASE WHEN active_thread_id=$2 THEN active_thread_turn_count+1 ELSE 1 END,
     active_thread_context_tokens=CASE WHEN $4::bigint>0 THEN $4::bigint WHEN active_thread_id=$2 THEN active_thread_context_tokens ELSE 0 END,
-    thread_rollover_required=FALSE,thread_contract_version=3,last_scanned_event_sequence=$3,pending_operation_step_id=NULL,updated_at=NOW() WHERE id=$1`,
+    thread_rollover_required=FALSE,thread_contract_version=4,last_scanned_event_sequence=$3,pending_operation_step_id=NULL,updated_at=NOW() WHERE id=$1`,
   [character.id, turn.threadId, sequence, contextTokens]);
   if (!turn.shouldRespond) {
     const sequence = Number((await client.query('SELECT COALESCE(MAX(world_sequence),0) AS sequence FROM scene_entries WHERE scene_id=$1', [state.sceneId])).rows[0].sequence);
@@ -138,7 +138,7 @@ export async function persistGeneratedTurn(client, context, turn) {
   const relationshipChanges = turn.relationshipChanges.slice(0, 3).filter((change) => validTargets.has(change.targetId) && Number.isInteger(change.delta) && (change.delta !== 0 || change.label));
   await client.query("UPDATE scene_participants SET idle_at_sequence=NULL,idle_reason='',idle_at=NULL WHERE scene_id=$1 AND left_sequence IS NULL", [state.sceneId]);
   await client.query(`INSERT INTO scene_entries (id,project_id,scene_id,entry_type,character_id,dialogue,action,sort_order,world_sequence,actor_type,event_kind,payload)
-    VALUES ($1,$2,$3,'message',$4,$5,$6,$7,$8,'CHARACTER','CHARACTER_RESPONSE',$9)`, [entryId, state.projectId, state.sceneId, character.id, turn.dialogue, turn.action, await nextEntryOrder(client, state.sceneId), sequence, JSON.stringify({ dialogue: turn.dialogue, action: turn.action, actionScope: turn.actionScope, actionTargetId: turn.actionTargetId, emotion: turn.emotion, sceneSignal: turn.sceneSignal, statePatch: turn.statePatch, relationshipChanges })]);
+    VALUES ($1,$2,$3,'message',$4,$5,$6,$7,$8,'CHARACTER','CHARACTER_RESPONSE',$9)`, [entryId, state.projectId, state.sceneId, character.id, turn.dialogue, turn.action, await nextEntryOrder(client, state.sceneId), sequence, JSON.stringify({ contentBlocks: turn.contentBlocks, dialogue: turn.dialogue, action: turn.action, actionScope: turn.actionScope, actionTargetId: turn.actionTargetId, emotion: turn.emotion, sceneSignal: turn.sceneSignal, statePatch: turn.statePatch, relationshipChanges })]);
   await client.query(`INSERT INTO scene_entry_recipients(entry_id,character_id) SELECT $1,character_id FROM scene_participants WHERE scene_id=$2 AND left_sequence IS NULL ON CONFLICT DO NOTHING`, [entryId, state.sceneId]);
   await client.query('UPDATE characters SET emotion=$2,current_state=$3 WHERE id=$1', [character.id, turn.emotion, JSON.stringify(nextState)]);
   await persistThread(sequence);
@@ -160,7 +160,7 @@ export async function persistGeneratedTurn(client, context, turn) {
       SELECT id FROM character_memories WHERE character_id=$1 AND archived_at IS NULL ORDER BY importance DESC,created_at DESC OFFSET 12)`, [character.id]);
   }
   const publicDirection = publicDirectionForSignal(turn.sceneSignal, character.name);
-  const summaryLine = `${character.name}: ${turn.dialogue} / ${turn.action}`;
+  const summaryLine = `${character.name}: ${turn.contentBlocks.map((block) => `${block.type === 'ACTION' ? '행동' : '대사'} ${block.text}`).join(' / ')}`;
   await client.query(`UPDATE scenes SET summary=RIGHT(summary || E'\n' || $2,1200),progress_signal=$3,public_direction=$4,updated_at=NOW() WHERE id=$1`, [state.sceneId, summaryLine, turn.sceneSignal, publicDirection]);
   await client.query('UPDATE projects SET turn_number=turn_number+1,public_direction=$2,updated_at=NOW() WHERE id=$1', [state.projectId, publicDirection]);
   return { skipped: false, entryId, sequence };
@@ -182,7 +182,7 @@ export async function updateDirectorThread(client, projectId, runtime, sequence 
   await client.query(`UPDATE projects SET active_director_thread_id=$2,
     director_thread_turn_count=CASE WHEN active_director_thread_id=$2 THEN director_thread_turn_count+1 ELSE 1 END,
     director_thread_context_tokens=CASE WHEN $4::bigint>0 THEN $4::bigint WHEN active_director_thread_id=$2 THEN director_thread_context_tokens ELSE 0 END,
-    director_thread_rollover_required=FALSE,director_thread_contract_version=3,
+    director_thread_rollover_required=FALSE,director_thread_contract_version=4,
     last_director_event_sequence=COALESCE($3,(SELECT COALESCE(MAX(world_sequence),0) FROM scene_entries WHERE project_id=$1)),updated_at=NOW()
     WHERE id=$1`, [projectId, result.threadId, sequence, contextTokens]);
 }

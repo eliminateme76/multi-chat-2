@@ -14,7 +14,7 @@ const CHARACTER_THREAD_TURN_LIMIT = Number(process.env.CHARACTER_THREAD_TURN_LIM
 const CHARACTER_THREAD_TOKEN_LIMIT = Number(process.env.CHARACTER_THREAD_TOKEN_LIMIT || 50000);
 const DIRECTOR_THREAD_TURN_LIMIT = Number(process.env.DIRECTOR_THREAD_TURN_LIMIT || 8);
 const DIRECTOR_THREAD_TOKEN_LIMIT = Number(process.env.DIRECTOR_THREAD_TOKEN_LIMIT || 80000);
-const AGENT_AUTHORITY_CONTRACT_VERSION = 3;
+const AGENT_AUTHORITY_CONTRACT_VERSION = 4;
 mkdirSync(AGENT_CWD, { recursive: true, mode: 0o700 });
 
 const shouldRollover = (owner, activeThreadId, turnCount, contextTokens, required) => Boolean(activeThreadId) && (required || Number(turnCount || 0) >= (owner === 'director' ? DIRECTOR_THREAD_TURN_LIMIT : CHARACTER_THREAD_TURN_LIMIT) || Number(contextTokens || 0) >= (owner === 'director' ? DIRECTOR_THREAD_TOKEN_LIMIT : CHARACTER_THREAD_TOKEN_LIMIT));
@@ -28,7 +28,15 @@ const turnSchema = {
   type: 'object',
   properties: {
     shouldRespond: { type: 'boolean' }, silenceReason: { type: 'string' },
-    dialogue: { type: 'string' }, action: { type: 'string' }, actionScope: { type: 'string', enum: ['NONE','SELF','CHARACTER_ATTEMPT','WORLD_ATTEMPT'] }, actionTargetId: { type: 'string' }, emotion: { type: 'string' },
+    contentBlocks: {
+      type: 'array', maxItems: 4,
+      items: {
+        type: 'object',
+        properties: { type: { type: 'string', enum: ['DIALOGUE','ACTION'] }, text: { type: 'string' } },
+        required: ['type','text'], additionalProperties: false
+      }
+    },
+    actionScope: { type: 'string', enum: ['NONE','SELF','CHARACTER_ATTEMPT','WORLD_ATTEMPT'] }, actionTargetId: { type: 'string' }, emotion: { type: 'string' },
     statePatch: {
       type: 'object', properties: {
         setCurrentGoal: { type: ['string','null'] }, setInternalConflict: { type: ['string','null'] },
@@ -48,7 +56,7 @@ const turnSchema = {
     },
     sceneSignal: { type: 'string', enum: ['continue', 'stalled', 'complete'] }
   },
-  required: ['shouldRespond', 'silenceReason', 'dialogue', 'action', 'actionScope', 'actionTargetId', 'emotion', 'statePatch', 'memory', 'memoryImportance', 'relationshipChanges', 'sceneSignal'],
+  required: ['shouldRespond', 'silenceReason', 'contentBlocks', 'actionScope', 'actionTargetId', 'emotion', 'statePatch', 'memory', 'memoryImportance', 'relationshipChanges', 'sceneSignal'],
   additionalProperties: false
 };
 
@@ -417,9 +425,18 @@ export function generateCodexTurn(context, promptOverride = '') {
     validate: (result) => {
       if (typeof result.shouldRespond !== 'boolean' || typeof result.silenceReason !== 'string') throw new Error('invalid response decision');
       if (typeof result.emotion !== 'string' || !result.emotion.trim()) throw new Error('missing emotion');
-      if (typeof result.dialogue !== 'string' || (result.shouldRespond && context.state.presentationMode === 'chat' && !result.dialogue.trim())) throw new Error('missing dialogue');
-      if (typeof result.action !== 'string' || (result.shouldRespond && context.state.presentationMode !== 'chat' && !result.action.trim() && !result.dialogue.trim())) throw new Error('missing response content');
-      for (const field of ['dialogue', 'action', 'emotion']) result[field] = result[field].trim();
+      if (!Array.isArray(result.contentBlocks) || result.contentBlocks.length > 4) throw new Error('invalid response content blocks');
+      result.contentBlocks = result.contentBlocks.map((block) => {
+        if (!block || !['DIALOGUE','ACTION'].includes(block.type) || typeof block.text !== 'string' || !block.text.trim()) throw new Error('invalid response content block');
+        return { type: block.type, text: block.text.trim() };
+      });
+      const dialogueBlocks = result.contentBlocks.filter((block) => block.type === 'DIALOGUE');
+      const actionBlocks = result.contentBlocks.filter((block) => block.type === 'ACTION');
+      if (result.shouldRespond && context.state.presentationMode === 'chat' && (!dialogueBlocks.length || actionBlocks.length)) throw new Error('chat response must contain dialogue blocks only');
+      if (result.shouldRespond && context.state.presentationMode !== 'chat' && !result.contentBlocks.length) throw new Error('missing response content');
+      result.dialogue = dialogueBlocks.map((block) => block.text).join('\n');
+      result.action = actionBlocks.map((block) => block.text).join('\n');
+      result.emotion = result.emotion.trim();
       result.silenceReason = result.silenceReason.trim();
       if (!['NONE','SELF','CHARACTER_ATTEMPT','WORLD_ATTEMPT'].includes(result.actionScope)) throw new Error('invalid action scope');
       if (typeof result.actionTargetId !== 'string') throw new Error('invalid action target');
@@ -432,7 +449,7 @@ export function generateCodexTurn(context, promptOverride = '') {
       if (result.actionScope !== 'CHARACTER_ATTEMPT' && result.actionTargetId) throw new Error('only character attempts may have an action target');
       if (!result.shouldRespond && context.state.presentationMode !== 'chat') throw new Error('story characters must respond');
       if (!result.shouldRespond && !result.silenceReason) throw new Error('missing silenceReason');
-      if (!result.shouldRespond && (result.dialogue || result.action)) throw new Error('silent response contains public content');
+      if (!result.shouldRespond && result.contentBlocks.length) throw new Error('silent response contains public content');
       if (typeof result.memory !== 'string') throw new Error('invalid memory');
       result.memory = result.memory.trim();
       if (!Number.isInteger(result.memoryImportance) || result.memoryImportance < 0 || result.memoryImportance > 100) throw new Error('invalid memoryImportance');

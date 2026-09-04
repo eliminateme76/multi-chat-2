@@ -24,6 +24,11 @@ const $ = (selector) => document.querySelector(selector);
 const esc = (text) => String(text).replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
 const characterById = (id) => state.characters.find((character) => character.id === id);
 const avatar = (character) => `<span class="avatar" style="background:${character.color}">${character.portraitUrl ? `<img src="${esc(character.portraitUrl)}" style="object-position:${esc(character.portraitPosition || '50%')} center" alt="${esc(character.name)} 얼굴" />` : character.emoji}</span>`;
+const storyContentBlocks = (log) => {
+  const stored = Array.isArray(log.payload?.contentBlocks) ? log.payload.contentBlocks : [];
+  if (stored.length) return stored.filter((block) => ['DIALOGUE','ACTION'].includes(block?.type) && block.text);
+  return [{ type: 'DIALOGUE', text: log.text }, { type: 'ACTION', text: log.action }].filter((block) => block.text);
+};
 
 function fillModelSelect(select, value = '') {
   const inherit = select.dataset.inherit;
@@ -133,7 +138,7 @@ function render() {
   document.querySelectorAll('[data-edit]').forEach((button) => { button.onclick = () => openCharacterModal(button.dataset.edit); });
   $('#conversation-log').classList.toggle('chat-mode', state.presentationMode === 'chat');
   const typingMessage = state.presentationMode === 'chat' && typingCharacter ? `<article class="message typing-message">${avatar(typingCharacter)}<div><div class="message-meta"><span class="message-name">${esc(typingCharacter.name)}</span></div><p class="typing-indicator"><i></i><i></i><i></i><span>입력 중</span></p></div></article>` : '';
-  $('#conversation-log').innerHTML = state.logs.map((log, index) => { const latest = index === state.logs.length - 1 ? ' latest-message' : ''; if (log.type === 'event') return `<div class="message event${latest}"><strong>DIRECTOR EVENT · ${esc(log.eventType || '일반')}</strong>${esc(log.text)}</div>`; const c = characterById(log.characterId); return `<article class="message${latest}">${avatar(c)}<div><div class="message-meta"><span class="message-name">${esc(c.name)}</span><span class="message-role">${esc(c.gender)} · ${esc(c.role)}</span></div><p class="message-text">${esc(log.text)}</p>${log.action ? `<p class="message-action">${esc(log.action)}</p>` : ''}</div></article>`; }).join('') + typingMessage;
+  $('#conversation-log').innerHTML = state.logs.map((log, index) => { const latest = index === state.logs.length - 1 ? ' latest-message' : ''; if (log.type === 'event') return `<div class="message event${latest}"><strong>DIRECTOR EVENT · ${esc(log.eventType || '일반')}</strong>${esc(log.text)}</div>`; const c = characterById(log.characterId); const blocks = storyContentBlocks(log).map((block) => `<p class="${block.type === 'ACTION' ? 'message-action' : 'message-text'}">${esc(block.text)}</p>`).join(''); return `<article class="message${latest}">${avatar(c)}<div><div class="message-meta"><span class="message-name">${esc(c.name)}</span><span class="message-role">${esc(c.gender)} · ${esc(c.role)}</span></div><div class="message-content">${blocks}</div></div></article>`; }).join('') + typingMessage;
   const log = $('#conversation-log'); log.scrollTop = log.scrollHeight;
   const status = state.storyStatus || {};
   const intensityLabel = { gentle: '잔잔하게', balanced: '균형 있게', high: '강하게' }[status.intensity] || '균형 있게';

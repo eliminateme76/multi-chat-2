@@ -48,7 +48,7 @@ export async function createStoryRepairProposal(pool, projectId, runId) {
   if (!state) throw new Error('Project not found.');
   const director = await getDirectorContext(pool, projectId);
   const scenes = (await pool.query(`SELECT scene_number AS "sceneNumber",location,scene_time AS time,summary FROM scenes WHERE project_id=$1 ORDER BY scene_number`, [projectId])).rows;
-  const recentEntries = (await pool.query(`SELECT s.scene_number AS "sceneNumber",e.world_sequence AS sequence,e.entry_type AS type,e.character_id AS "characterId",e.dialogue,e.action,e.event_text AS "eventText",e.event_type AS "eventType"
+  const recentEntries = (await pool.query(`SELECT s.scene_number AS "sceneNumber",e.world_sequence AS sequence,e.entry_type AS type,e.character_id AS "characterId",e.dialogue,e.action,e.event_text AS "eventText",e.event_type AS "eventType",e.payload
     FROM scene_entries e JOIN scenes s ON s.id=e.scene_id WHERE e.project_id=$1 ORDER BY e.world_sequence DESC LIMIT 20`, [projectId])).rows.reverse();
   const sceneHistory = { scenes, recentEntries };
   const memories = (await pool.query(`SELECT id,character_id AS "characterId",memory_text AS "memoryText",emotion,importance,created_at AS "createdAt"

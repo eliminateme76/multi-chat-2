@@ -19,7 +19,7 @@ class FakeBridge:
 
 
 def test_character_runs_through_concordia_entity_and_engine():
-    bridge = FakeBridge({"dialogue": "알겠어.", "actionScope": "NONE"})
+    bridge = FakeBridge({"contentBlocks": [{"type": "DIALOGUE", "text": "알겠어."}], "actionScope": "NONE"})
     result = run_character(
         {
             "name": "루카",
@@ -30,7 +30,7 @@ def test_character_runs_through_concordia_entity_and_engine():
         bridge,
     )
 
-    assert result["value"]["dialogue"] == "알겠어."
+    assert result["value"]["contentBlocks"] == [{"type": "DIALOGUE", "text": "알겠어."}]
     assert result["engine"] == {"name": ENGINE_NAME, "version": ENGINE_VERSION}
     assert result["concordia"]["entity"] == "루카"
     assert result["concordia"]["steps"] == 1
@@ -85,7 +85,7 @@ def test_worker_reverse_rpc_round_trip():
                 {
                     "id": callback["id"],
                     "result": {
-                        "value": {"dialogue": "확인했습니다.", "actionScope": "NONE"},
+                        "value": {"contentBlocks": [{"type": "DIALOGUE", "text": "확인했습니다."}], "actionScope": "NONE"},
                         "runtime": {"threadId": "thread-rpc"},
                     },
                 },
@@ -96,7 +96,7 @@ def test_worker_reverse_rpc_round_trip():
         worker.stdin.flush()
         response = json.loads(worker.stdout.readline())
         assert response["id"] == 7
-        assert response["result"]["value"]["dialogue"] == "확인했습니다."
+        assert response["result"]["value"]["contentBlocks"] == [{"type": "DIALOGUE", "text": "확인했습니다."}]
         assert response["result"]["runtime"]["threadId"] == "thread-rpc"
     finally:
         worker.terminate()

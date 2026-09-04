@@ -8,7 +8,7 @@ One project is one `World` and one continuous history. PostgreSQL is authoritati
 - `scenes`: CHAT/STORY presentation, physical/channel context, `dramatic_state`, summary and progress signal
 - `characters`: world-local identity, initial profile, current state, active character thread and event cursor
 - `relationships`: directed current and initial relationship labels/scores
-- `scene_entries`: globally ordered user, character, Director and system Events
+- `scene_entries`: globally ordered user, character, Director and system Events; new character responses keep ordered `DIALOGUE`/`ACTION` blocks in the JSON payload while legacy text columns remain populated for compatibility
 - `scene_participants` / `scene_entry_recipients`: presence and immutable visibility
 - `character_memories`: private durable memories; archived memories remain auditable
 - `world_operations`: durable infrastructure work queue
@@ -35,8 +35,8 @@ The user selects `gentle`, `balanced`, or `high` per world. This controls Direct
 
 1. Acquire the project advisory lock and load the active Scene, participants and story state.
 2. Reuse a valid reaction-opportunity queue, or run the Concordia World GM to establish any prerequisite world event/transition and select a perceiving responder.
-3. Reconstruct that character as a Concordia Entity from its current DB profile/state, relationships, private memories and visible Events. Execute one bounded Engine step and call its persistent Codex thread for a structured action.
-4. Validate authority and atomically persist at most one character Event, state/memory/relationship changes, cursor and thread link. Mark the durable operation `GM_PENDING` in the same transaction.
+3. Reconstruct that character as a Concordia Entity from its current DB profile/state, relationships, private memories and visible Events. Execute one bounded Engine step and call its persistent Codex thread for ordered `DIALOGUE`/`ACTION` blocks and structured authority/state output.
+4. Validate block order and authority, then atomically persist at most one character Event, its ordered blocks and compatibility text, state/memory/relationship changes, cursor and thread link. Mark the durable operation `GM_PENDING` in the same transaction.
 5. Re-read authoritative state and run the Concordia World GM after every character result. The GM may establish environment/chance/rule consequences, inject a minor event, transition the Scene, propose a user-approved major change, and schedule one or two perceiving responders.
 6. The GM never resolves `CHARACTER_ATTEMPT`; that target is forced as the next responder and retains acceptance/refusal authority. A `WORLD_ATTEMPT` must be resolved in this same operation before completion.
 7. Persist the GM event/scene/story patch, Director thread and next queue transactionally with `GM_COMPLETED`, then complete the operation. If the GM call fails, retry resumes at step 5 and does not regenerate the completed character Event. If final result serialization fails after `GM_COMPLETED`, retry skips both model calls and only finalizes the operation.
@@ -64,6 +64,8 @@ Project lifecycle actions are intentionally separate from world-content editing 
 ## Visibility and safety
 
 Character prompts include only public world/Scene state, active participant routing IDs/names, that character's current profile/state/secret, its relevant directed relationships, its private active memories, and Events explicitly visible to it since its cursor. Routing IDs allow validated `CHARACTER_ATTEMPT` targets; other characters' secrets, memories and private Director state remain excluded. Event cursors advance only after response persistence succeeds.
+
+For new STORY responses, the play UI renders persisted content blocks in their stored order, so an action may precede dialogue or dialogue and action may alternate. Older rows without blocks retain their historical dialogue-then-action rendering. Concordia character and World GM prompts prioritize the active dramatic question, choice and relationship movement; procedural or forensic detail that does not affect them is compressed instead of recursively expanded.
 
 The browser never receives Codex credentials or direct app-server access. Codex failures return errors; no hard-coded dialogue fallback is used. Story mutations use PostgreSQL transactions and project-scoped locking.
 

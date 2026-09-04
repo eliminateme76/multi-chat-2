@@ -57,11 +57,18 @@ assert.equal(interaction.planStartedSequence, 14);
 const prompt = buildCharacterTurnPrompt({
   character: { id: ids[0], name: '가람', role: '탐정', gender: '여성', personality: '신중함', speechStyle: '짧은 존댓말', goal: '진실 찾기', secret: '없음', emotion: '집중', currentState: {} },
   state: { world: { title: '시험 세계', location: '서재', time: '밤', mood: '고요', description: '문을 조사한다.', rules: '' }, sceneSummary: '', publicDirection: '', presentationMode: 'scene', storyStatus: {}, dramaticState: {}, relationships: [], characters: [{ id: ids[0], name: '가람' }, { id: ids[1], name: '나래' }], participants: [{ characterId: ids[0] }, { characterId: ids[1] }], logs: [{ type: 'event', eventType: '비공개', text: '절대 노출되면 안 됨' }] },
-  recentVisibleEvents: [{ type: 'event', eventType: '발견', eventText: '창문이 열려 있다.' }]
+  recentVisibleEvents: [
+    { type: 'event', eventType: '발견', eventText: '창문이 열려 있다.' },
+    { type: 'message', characterId: ids[1], text: '기존 대사', action: '기존 행동', payload: { contentBlocks: [{ type: 'ACTION', text: '먼저 창가로 물러난다.' }, { type: 'DIALOGUE', text: '불을 끄세요.' }] } }
+  ]
 });
 assert.match(prompt, /창문이 열려 있다/);
+assert.match(prompt, /행동: 먼저 창가로 물러난다.[\s\S]*대사: 불을 끄세요/);
+assert.doesNotMatch(prompt, /기존 대사|기존 행동/);
 assert.doesNotMatch(prompt, /절대 노출되면 안 됨/);
 assert.match(prompt, /독립적으로 결정/);
+assert.match(prompt, /핵심 질문·선택·관계 변화/);
+assert.match(prompt, /contentBlocks에는 DIALOGUE와 ACTION을 실제 발생 순서대로/);
 assert.match(prompt, /WORLD_ATTEMPT/);
 assert.match(prompt, /CHARACTER_ATTEMPT/);
 assert.match(prompt, /character-b \| 나래/);
@@ -73,5 +80,6 @@ const directorCorrectionPrompt = buildDirectorProgressionPrompt({
 }, [{ id: ids[0], name: '가람', role: '탐정', emotion: '집중', currentState: {} }], 'WORLD_ATTEMPT를 먼저 판정하세요.');
 assert.match(directorCorrectionPrompt, /재판정 지시/);
 assert.match(directorCorrectionPrompt, /WORLD_ATTEMPT를 먼저 판정/);
+assert.match(directorCorrectionPrompt, /핵심 질문·선택·관계/);
 
 console.log('Latency logic verification passed.');
