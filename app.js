@@ -553,6 +553,35 @@ async function cloneCurrentPlaythrough() {
     const url = new URL(window.location.href); url.searchParams.set('project', currentProjectId); window.history.replaceState({}, '', url);
   } catch (error) { $('#save-status').textContent = '새 진행 생성 실패'; alert(error.message); }
 }
+async function exportCurrentWorld() {
+  if (!window.confirm('세계관 파일에는 캐릭터의 비공개 설정과 비밀이 포함됩니다. 파일로 내보낼까요?')) return;
+  try {
+    $('#save-status').textContent = '세계관 파일 준비 중…';
+    const worldPackage = await api('/api/projects/export');
+    const blob = new Blob([`${JSON.stringify(worldPackage, null, 2)}\n`], { type: 'application/json' });
+    const link = document.createElement('a');
+    const safeTitle = state.world.title.replace(/[^0-9A-Za-z가-힣_-]+/g, '-').replace(/^-|-$/g, '') || 'sceneweaver-world';
+    link.href = URL.createObjectURL(blob); link.download = `${safeTitle}.sceneweaver.json`; document.body.append(link); link.click(); link.remove(); URL.revokeObjectURL(link.href);
+    $('#save-status').textContent = '세계관 파일 저장됨';
+    $('#project-actions').removeAttribute('open');
+  } catch (error) { $('#save-status').textContent = '세계관 내보내기 실패'; alert(error.message); }
+}
+async function importWorldFile(file) {
+  if (!file) return;
+  stopAutoProgress();
+  try {
+    $('#save-status').textContent = '세계관 가져오는 중…';
+    const worldPackage = JSON.parse(await file.text());
+    const result = await api('/api/projects/import', { method: 'POST', body: JSON.stringify({ worldPackage }) });
+    currentProjectId = result.projectId;
+    await loadProjectOptions(currentProjectId);
+    setState(result.state);
+    eventSuggestions = []; renderSuggestions();
+    $('#project-actions').removeAttribute('open');
+    const url = new URL(window.location.href); url.searchParams.set('project', currentProjectId); window.history.replaceState({}, '', url);
+  } catch (error) { $('#save-status').textContent = '세계관 가져오기 실패'; alert(error instanceof SyntaxError ? '올바른 Sceneweaver 세계관 JSON 파일이 아닙니다.' : error.message); }
+  finally { $('#import-world-file').value = ''; }
+}
 
 $('#advance-button').onclick = advanceTurn;
 $('#auto-button').onclick = () => { if (autoEnabled) stopAutoProgress(); else { autoEnabled = true; scheduleAutoTurn(0); } renderTurnControls(); };
@@ -576,6 +605,9 @@ $('#suggest-button').onclick = async () => {
 $('#character-form').onsubmit = (event) => { event.preventDefault(); saveCharacter(); }; $('#world-form').onsubmit = (event) => { event.preventDefault(); saveWorld(); };
 $('#reset-playthrough-button').onclick = resetCurrentPlaythrough;
 $('#clone-playthrough-button').onclick = cloneCurrentPlaythrough;
+$('#export-world-button').onclick = exportCurrentWorld;
+$('#import-world-button').onclick = () => $('#import-world-file').click();
+$('#import-world-file').onchange = (event) => importWorldFile(event.target.files?.[0]);
 document.addEventListener('click', (event) => { const menu = $('#project-actions'); if (menu.open && !menu.contains(event.target)) menu.removeAttribute('open'); });
 $('#save-ai-settings-button').onclick = saveAiSettings;
 $('#apply-story-repair').onclick = () => decideStoryRepair('apply');

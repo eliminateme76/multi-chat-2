@@ -5,7 +5,7 @@ Last updated: 2026-09-04 (Asia/Seoul)
 ## Current baseline
 
 - Branch: `main`; repository: `eliminateme76/multi-chat-2`.
-- This is the Concordia-only comparison fork. The original `multi-chat` repository is not modified by this work.
+- This is the Concordia-only comparison fork with an independent repository and database; portable world files are its explicit interchange boundary with the original app.
 - PostgreSQL remains authoritative. Concordia entities/components are reconstructed for each step and Codex threads remain replaceable context.
 - Local defaults are database `sceneweaver_concordia`, application port `3200`, and `gdm-concordia==2.4.0`.
 - No OpenAI API key is used. Node owns the authenticated Codex app-server process under `SCENEWEAVER_CODEX_HOME`.
@@ -20,9 +20,12 @@ Last updated: 2026-09-04 (Asia/Seoul)
 
 ## Implemented in this change
 
+- Added engine-neutral `sceneweaver-world` v1 export/import to the current-project menu. It transfers the initial world, cast, private character profiles, relationships and opening dramatic setup between the original and Concordia repositories, remaps all character ids, and intentionally excludes Events, progressed state, memories, threads, operations, runtime models and engine metadata.
+- Added an explicit privacy confirmation before export because the portable file includes character secrets. Import validates and bounds the package, creates an independent project transactionally, and runs it with Concordia and the destination defaults.
+- Made STORY dialogue less scripted: mutable beliefs/commitments/internal conflict are now explicitly private acting notes, responses normally focus on one central reaction in one or two natural sentences, established Korean speech level/pronouns stay consistent, and occupational metaphors are discouraged unless genuinely natural.
+- Advanced the Concordia character/Director prompt contract to version `5`; older active threads roll over once on their next use so they cannot retain the prior dialogue instruction.
 - Replaced fixed dialogue-then-action output with up to four ordered `DIALOGUE`/`ACTION` blocks throughout the Concordia character path. Blocks survive worker passthrough, validation, PostgreSQL persistence, later-agent context and browser rendering; flattened text columns remain populated for compatibility.
 - Added narrative-salience rules to the Concordia character Entity and World GM prompts. Active questions, choices and relationships take priority, while nonessential regulations, procedures, equipment operation and fine physical traces are omitted or compressed.
-- Advanced the runtime prompt contract to version `4`; active version-3 character and Director threads roll over once on next use.
 - Improved long-form story readability with Noto Sans KR for content, larger and darker dialogue, non-italic action text, higher-contrast Director events, and clearer state/sidebar copy. This is presentation-only and does not alter Concordia progression or the preserved 50-turn comparison world.
 - Added a persistent Python JSONL worker in `concordia_runtime/` using real Concordia `EntityAgentWithLogging`, `ContextComponent`, `ActingComponent`, `ActionSpec`, and a bounded custom `Engine`.
 - Added `concordia-client.js`. The worker requests structured model samples through reverse stdio RPC; Node calls the existing Codex app-server and returns the validated result. Python opens no port and receives no auth material.
@@ -40,13 +43,14 @@ Last updated: 2026-09-04 (Asia/Seoul)
 - Latest migration: `db/016_concordia_engine.sql`.
 - Adds `projects.simulation_engine` and `projects.simulation_engine_version`, fixed to `concordia` / `2.4.0` in this fork.
 - Changes new character/Director thread contract defaults to version 3 and marks older active threads for one rollover.
-- Runtime code now persists contract version 4 after successful story calls. No new migration is required because ordered blocks use the existing JSONB payload and existing contract columns.
+- Runtime code now persists contract version 5 after successful story calls. No new migration is required because ordered blocks and portable-world import use existing JSONB/relational columns and HTTP JSON.
 - `npm run migrate` is safe to rerun.
 
 ## Verification completed
 
+- `npm run check` passed, including Node syntax checks, Python compilation and all 4 Concordia tests; `npm run verify:latency-logic` also passed with the natural-dialogue contract checks.
+- `npm run verify:api` passed against the real Codex app-server and Concordia worker after the portability change. A disposable world exported and re-imported with three fresh character ids, no Events or threads, and `concordia/2.4.0` selected by the destination; sampled operations took 58.7s and 37.7s.
 - `npm run check` passed with all 4 Concordia Python tests, and `npm run verify:latency-logic` passed for ordered block context reconstruction, legacy fallback and narrative-salience prompt rules.
-- `npm run verify:api` passed with the real Codex app-server and Concordia worker using `gpt-5.6-luna`/`medium`. It persisted ordered blocks and contract version 4 while preserving the post-character GM checkpoint and reusable responder plan; sampled operations took 42.0s and 35.5s.
 - The localhost-only server on port 3200 was restarted from `/home/codex_home/multi-chat-2`; `/api/state` and the served ordered-block renderer responded successfully after restart.
 - `npm run check` passed after the readability-only UI change. The shared story layout was visually checked at 1920×1080 in headless Chrome against the preserved comparison run.
 - `npm run check`: passed, including Node syntax checks, Python compilation and 4 pytest tests.

@@ -14,6 +14,7 @@ let server;
 let serverOutput = '';
 let createdWorldId;
 let clonedWorldId;
+let importedWorldId;
 let worldDraftId;
 const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 const requestResponse = async (path, options) => {
@@ -122,7 +123,7 @@ try {
   const persistedRuntime = (await pool.query(`SELECT p.director_thread_turn_count AS "directorTurns",p.director_thread_context_tokens AS "directorTokens",p.director_thread_contract_version AS "directorContractVersion",
     c.active_thread_turn_count AS "characterTurns",c.active_thread_context_tokens AS "characterTokens",c.thread_contract_version AS "characterContractVersion"
     FROM projects p JOIN characters c ON c.project_id=p.id AND c.id=$2 WHERE p.id=$1`, [projectId, operation.steps[0].characterId])).rows[0];
-  if (Number(persistedRuntime.directorTurns) < 2 || Number(persistedRuntime.characterTurns) !== 1 || Number(persistedRuntime.directorTokens) <= 0 || Number(persistedRuntime.characterTokens) <= 0 || Number(persistedRuntime.directorContractVersion) !== 4 || Number(persistedRuntime.characterContractVersion) !== 4) throw new Error(`Persistent thread runtime metadata was not stored: ${JSON.stringify(persistedRuntime)}`);
+  if (Number(persistedRuntime.directorTurns) < 2 || Number(persistedRuntime.characterTurns) !== 1 || Number(persistedRuntime.directorTokens) <= 0 || Number(persistedRuntime.characterTokens) <= 0 || Number(persistedRuntime.directorContractVersion) !== 5 || Number(persistedRuntime.characterContractVersion) !== 5) throw new Error(`Persistent thread runtime metadata was not stored: ${JSON.stringify(persistedRuntime)}`);
   const firstPlanView = (await request('/api/runtime/director-plan')).plan;
   if (!firstPlanView?.rationale || !firstPlanView.responders?.length || firstPlanView.action !== (operation.result.directorPlan?.action || operation.result.directorAction)) throw new Error('Sanitized reaction queue audit is missing.');
   const queuedCharacterId = afterTurn.participants.find((participant) => participant.characterId !== operation.steps[0].characterId)?.characterId || afterTurn.participants[0].characterId;
@@ -165,9 +166,15 @@ try {
   if (!resetCloneResponse.ok) throw new Error(`Clone reset failed: ${await resetCloneResponse.text()}`);
   const resetClone = await resetCloneResponse.json();
   if (resetClone.repairNeeded || resetClone.logs.length || !Object.keys(resetClone.storyState || {}).length || resetClone.dramaticState.participantIds.length !== resetClone.characters.length) throw new Error('A reset playthrough did not restore a complete initial story state.');
-  console.log(JSON.stringify({ createdWorldId, clonedWorldId, createdCharacters: createdWorld.state.characters.length, configuredModel: testModel.id, configuredEffort: testEffort, preservedThreads: [...threadIdsBeforeSave.values()].filter(Boolean).length, inheritedCharacter: inheritedCharacter.name, beforeScene: before.sceneNumber, afterScene: afterEvent.sceneNumber, afterTurn: afterTurn.turn, worldResolution: `${operation.result.worldPhase}/${operation.result.worldOutcome}/${operation.result.tensionDirection}`, signal: afterTurn.sceneSignal, oneResponsePerOperation: operation.steps.length === 1, reusedDirectorPlan: reusedOperation.result.planReused, firstOperationMs: Date.parse(operation.completedAt) - Date.parse(operation.startedAt), reusedOperationMs: Date.parse(reusedOperation.completedAt) - Date.parse(reusedOperation.startedAt), firstRuntime: operation.result.runtime }, null, 2));
+  const worldPackage = await request('/api/projects/export');
+  if (worldPackage.format !== 'sceneweaver-world' || worldPackage.version !== 1 || worldPackage.characters.length !== characterIds.length || 'simulationEngine' in worldPackage) throw new Error('Portable world export is incomplete or engine-specific.');
+  const imported = await request('/api/projects/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ worldPackage }) });
+  importedWorldId = imported.projectId;
+  if (imported.state.logs.length || imported.state.characters.length !== characterIds.length || imported.state.characters.some((character) => characterIds.includes(character.id) || character.activeThreadId) || imported.state.world.title !== worldPackage.world.title || imported.state.world.rules !== worldPackage.world.rules || imported.state.simulationEngine !== 'concordia') throw new Error('Portable world import did not create an independent Concordia world.');
+  console.log(JSON.stringify({ createdWorldId, clonedWorldId, importedWorldId, portableWorldImport: true, createdCharacters: createdWorld.state.characters.length, configuredModel: testModel.id, configuredEffort: testEffort, preservedThreads: [...threadIdsBeforeSave.values()].filter(Boolean).length, inheritedCharacter: inheritedCharacter.name, beforeScene: before.sceneNumber, afterScene: afterEvent.sceneNumber, afterTurn: afterTurn.turn, worldResolution: `${operation.result.worldPhase}/${operation.result.worldOutcome}/${operation.result.tensionDirection}`, signal: afterTurn.sceneSignal, oneResponsePerOperation: operation.steps.length === 1, reusedDirectorPlan: reusedOperation.result.planReused, firstOperationMs: Date.parse(operation.completedAt) - Date.parse(operation.startedAt), reusedOperationMs: Date.parse(reusedOperation.completedAt) - Date.parse(reusedOperation.startedAt), firstRuntime: operation.result.runtime }, null, 2));
 } finally {
   server?.kill();
+  if (importedWorldId) await pool.query('DELETE FROM projects WHERE id=$1', [importedWorldId]);
   if (clonedWorldId) await pool.query('DELETE FROM projects WHERE id=$1', [clonedWorldId]);
   if (createdWorldId) await pool.query('DELETE FROM projects WHERE id=$1', [createdWorldId]);
   if (worldDraftId) await pool.query('DELETE FROM world_creation_drafts WHERE id=$1', [worldDraftId]);

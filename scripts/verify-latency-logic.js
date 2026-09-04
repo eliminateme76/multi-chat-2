@@ -68,6 +68,8 @@ assert.doesNotMatch(prompt, /기존 대사|기존 행동/);
 assert.doesNotMatch(prompt, /절대 노출되면 안 됨/);
 assert.match(prompt, /독립적으로 결정/);
 assert.match(prompt, /핵심 질문·선택·관계 변화/);
+assert.match(prompt, /비공개 메모이지 대사 원문이 아닙니다/);
+assert.match(prompt, /반말·존댓말·호칭을 일관되게 유지/);
 assert.match(prompt, /contentBlocks에는 DIALOGUE와 ACTION을 실제 발생 순서대로/);
 assert.match(prompt, /WORLD_ATTEMPT/);
 assert.match(prompt, /CHARACTER_ATTEMPT/);

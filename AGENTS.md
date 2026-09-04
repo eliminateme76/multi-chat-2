@@ -70,6 +70,7 @@ Browser (index.html + app.js)
 - The character model independently returns ordered dialogue/action blocks plus emotion and classifies resolution authority as self-controlled, targeted at another active character, or requiring a World judgment. Targeted interactions route directly to that character; World attempts route back through the Director. The actor never declares external success or another character's reaction.
 - Model and reasoning effort are resolved from character override → role default → server fallback and are sent on every `turn/start`; do not make thread history authoritative for runtime configuration.
 - Character persistence commits before GM judgment and marks the operation `GM_PENDING`; GM state/event/queue persistence atomically marks it `GM_COMPLETED`. Retrying the latter never regenerates the character entry.
+- Portable `sceneweaver-world` files share initial world/cast/relationship/story setup across the original and Concordia apps. Imports always issue new world-local character ids and never carry Events, memories, threads, operations, model settings, or engine settings.
 - Do not expose Codex auth details or app-server directly to the browser.
 - Do not silently replace Codex failures with hard-coded dialogue. Return an API error instead.
 

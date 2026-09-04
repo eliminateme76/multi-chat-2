@@ -14,7 +14,7 @@ const CHARACTER_THREAD_TURN_LIMIT = Number(process.env.CHARACTER_THREAD_TURN_LIM
 const CHARACTER_THREAD_TOKEN_LIMIT = Number(process.env.CHARACTER_THREAD_TOKEN_LIMIT || 50000);
 const DIRECTOR_THREAD_TURN_LIMIT = Number(process.env.DIRECTOR_THREAD_TURN_LIMIT || 8);
 const DIRECTOR_THREAD_TOKEN_LIMIT = Number(process.env.DIRECTOR_THREAD_TOKEN_LIMIT || 80000);
-const AGENT_AUTHORITY_CONTRACT_VERSION = 4;
+const AGENT_AUTHORITY_CONTRACT_VERSION = 5;
 mkdirSync(AGENT_CWD, { recursive: true, mode: 0o700 });
 
 const shouldRollover = (owner, activeThreadId, turnCount, contextTokens, required) => Boolean(activeThreadId) && (required || Number(turnCount || 0) >= (owner === 'director' ? DIRECTOR_THREAD_TURN_LIMIT : CHARACTER_THREAD_TURN_LIMIT) || Number(contextTokens || 0) >= (owner === 'director' ? DIRECTOR_THREAD_TOKEN_LIMIT : CHARACTER_THREAD_TOKEN_LIMIT));

@@ -9,7 +9,7 @@ import { appendSceneEvent, buildTurnContext, getActiveParticipants, getStoryStat
 import { endStage, failRun, failStage, finishRun, snapshot, startRun, startStage, subscribe } from './runtime-telemetry.js';
 import { enqueueProgression, getOperation, resumeQueuedOperations, retryProgression } from './progression-runner.js';
 import { applyDirectorEvent, createDirectorSuggestions, listEventSuggestions, rejectMajorSuggestions } from './director-engine.js';
-import { clonePlaythrough, resetPlaythrough } from './project-lifecycle.js';
+import { clonePlaythrough, exportWorldPackage, importWorldPackage, resetPlaythrough } from './project-lifecycle.js';
 import { cancelWorldDraft, converseWorldDraft, createWorldFromDraft, getWorldDraft, listWorldDrafts, saveWorldDraft, startWorldDraft } from './world-builder.js';
 import { getRuntimeSettings, updateRuntimeSettings } from './runtime-settings.js';
 import { createStoryRepairProposal, decideStoryRepair, getPendingStoryRepair } from './story-repair.js';
@@ -25,7 +25,7 @@ const DEFAULT_PROJECT_ID = '00000000-0000-4000-8000-000000000001';
 const EVENT_TYPES = new Set(['일상', '관계', '연락', '선택', '발견', '돌발', '시간 전환', '분위기', '일반']);
 const REASONING_EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
 const DRAMA_INTENSITIES = new Set(['gentle', 'balanced', 'high']);
-app.use(express.json());
+app.use(express.json({ limit: '256kb' }));
 app.use(express.static(root));
 
 const required = (value, name) => {
@@ -79,6 +79,17 @@ app.post('/api/projects/reset', async (req, res, next) => {
 app.post('/api/projects/clone', async (req, res, next) => {
   try {
     const projectId = await clonePlaythrough(pool, projectIdFrom(req), optionalText(req.body.title));
+    res.status(201).json({ projectId, state: await getStoryState(pool, projectId) });
+  } catch (error) { next(error); }
+});
+
+app.get('/api/projects/export', async (req, res, next) => {
+  try { res.json(await exportWorldPackage(pool, projectIdFrom(req))); } catch (error) { next(error); }
+});
+
+app.post('/api/projects/import', async (req, res, next) => {
+  try {
+    const projectId = await importWorldPackage(pool, req.body);
     res.status(201).json({ projectId, state: await getStoryState(pool, projectId) });
   } catch (error) { next(error); }
 });
